@@ -1,0 +1,125 @@
+#include "supervisor_task.h"
+#include "hardware.h"
+#include "mailbox.h"
+#include "messages.h"
+#include "link_tx_task.h"
+#include "motor_task.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include <Arduino.h>
+
+#define SUPERVISOR_TASK_PERIOD_MS 50
+#define WATCHDOG_TIMEOUT_MS 120
+
+static mailbox_t *supervisor_mb = NULL;
+static mailbox_t *motor_mb = NULL;
+static mailbox_t *steer_mb = NULL;
+
+static system_mode_t current_mode = MODE_MANUAL;
+static system_state_t current_state = STATE_DISARMED;
+static uint32_t last_heartbeat_ms = 0;
+static bool estop_triggered = false;
+
+void supervisor_task(void *pvParameters) {
+    supervisor_params_t *params = (supervisor_params_t *)pvParameters;
+    supervisor_mb = params->supervisor_mailbox;
+    motor_mb = params->motor_mailbox;
+    steer_mb = params->steer_mailbox;
+    
+    Serial.println("[SupervisorTask] Supervisor task started");
+    
+    while (1) {
+        uint32_t current_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
+        
+        // Read supervisor mailbox for commands
+        topic_t topic;
+        command_type_t cmd;
+        int32_t value;
+        uint32_t ts_ms;
+        bool expired;
+        
+        if (mailbox_read(supervisor_mb, &topic, &cmd, &value, &ts_ms, &expired)) {
+            if (!expired) {
+                switch (cmd) {
+                    case CMD_SYS_ARM:
+                        if (current_state == STATE_DISARMED) {
+                            current_state = STATE_ARMED;
+                            last_heartbeat_ms = current_ms;
+                            Serial.println("[SupervisorTask] System ARMED");
+                        }
+                        break;
+                        
+                    case CMD_SYS_DISARM:
+                        current_state = STATE_DISARMED;
+                        motor_stop();
+                        steer_set_angle(SERVO_CENTER);
+                        Serial.println("[SupervisorTask] System DISARMED");
+                        break;
+                        
+                    case CMD_SYS_MODE:
+                        current_mode = (value == MODE_AUTO) ? MODE_AUTO : MODE_MANUAL;
+                        Serial.print("[SupervisorTask] Mode changed to: ");
+                        Serial.println(current_mode == MODE_AUTO ? "AUTO" : "MANUAL");
+                        break;
+                        
+                    default:
+                        break;
+                }
+            }
+        }
+        
+        // Check E-STOP GPIO
+        bool estop_current = estop_is_triggered();
+        if (estop_current && !estop_triggered) {
+            Serial.println("[SupervisorTask] E-STOP triggered via GPIO!");
+            estop_triggered = true;
+            current_state = STATE_FAULT;
+            motor_task_trigger_emergency();
+            mailbox_write(steer_mb, TOPIC_STEER, CMD_STOP, 0, 100);
+        } else if (!estop_current && estop_triggered) {
+            Serial.println("[SupervisorTask] E-STOP released");
+            estop_triggered = false;
+        }
+        
+        // Watchdog: Check heartbeat timeout
+        if (current_mode == MODE_AUTO && current_state != STATE_DISARMED) {
+            if (last_heartbeat_ms > 0) {
+                uint32_t heartbeat_age = current_ms - last_heartbeat_ms;
+                if (heartbeat_age > WATCHDOG_TIMEOUT_MS) {
+                    Serial.print("[SupervisorTask] Watchdog timeout! Heartbeat age: ");
+                    Serial.print(heartbeat_age);
+                    Serial.println(" ms");
+                    current_state = STATE_FAULT;
+                    motor_task_trigger_emergency();
+                    mailbox_write(steer_mb, TOPIC_STEER, CMD_STOP, 0, 100);
+                }
+            }
+        }
+        
+        // State machine transitions
+        if (current_state == STATE_ARMED && current_mode == MODE_AUTO) {
+            // Transition to RUNNING if we have valid heartbeat
+            if (last_heartbeat_ms > 0 && (current_ms - last_heartbeat_ms) < WATCHDOG_TIMEOUT_MS) {
+                current_state = STATE_RUNNING;
+            }
+        }
+        
+        // Send telemetry
+        uint32_t heartbeat_age = (last_heartbeat_ms > 0) ? (current_ms - last_heartbeat_ms) : 0;
+        link_tx_send_status(current_mode, current_state, heartbeat_age);
+        
+        vTaskDelay(pdMS_TO_TICKS(SUPERVISOR_TASK_PERIOD_MS));
+    }
+}
+
+void supervisor_update_heartbeat(void) {
+    last_heartbeat_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
+}
+
+system_mode_t supervisor_get_mode(void) {
+    return current_mode;
+}
+
+system_state_t supervisor_get_state(void) {
+    return current_state;
+}

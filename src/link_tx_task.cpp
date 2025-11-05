@@ -1,0 +1,56 @@
+#include "link_tx_task.h"
+#include "hardware.h"
+#include "messages.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
+#include <Arduino.h>
+#include <stdio.h>
+#include <string.h>
+
+#define TX_QUEUE_SIZE 10
+
+typedef struct {
+    system_mode_t mode;
+    system_state_t state;
+    uint32_t heartbeat_age_ms;
+} telemetry_msg_t;
+
+static QueueHandle_t tx_queue = NULL;
+
+void link_tx_task(void *pvParameters) {
+    tx_queue = xQueueCreate(TX_QUEUE_SIZE, sizeof(telemetry_msg_t));
+    if (tx_queue == NULL) {
+        Serial.println("[LinkTxTask] Failed to create TX queue");
+        vTaskDelete(NULL);
+        return;
+    }
+    
+    Serial.println("[LinkTxTask] LinkTx task started");
+    
+    while (1) {
+        telemetry_msg_t msg;
+        if (xQueueReceive(tx_queue, &msg, pdMS_TO_TICKS(100)) == pdTRUE) {
+            char buffer[128];
+            snprintf(buffer, sizeof(buffer), "STATUS:MODE=%s,STATE=%s,HB=%lu\n",
+                     msg.mode == MODE_AUTO ? "AUTO" : "MANUAL",
+                     msg.state == STATE_DISARMED ? "DISARMED" :
+                     msg.state == STATE_ARMED ? "ARMED" :
+                     msg.state == STATE_RUNNING ? "RUNNING" : "FAULT",
+                     (unsigned long)msg.heartbeat_age_ms);
+            
+            Serial1.print(buffer);
+        }
+    }
+}
+
+void link_tx_send_status(system_mode_t mode, system_state_t state, uint32_t heartbeat_age_ms) {
+    if (tx_queue != NULL) {
+        telemetry_msg_t msg = {
+            .mode = mode,
+            .state = state,
+            .heartbeat_age_ms = heartbeat_age_ms
+        };
+        xQueueSend(tx_queue, &msg, 0); // Non-blocking
+    }
+}
