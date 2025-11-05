@@ -1,4 +1,34 @@
 .pio
 .vscode/*
-/platformio.ini
-/src/wifi_data.h
+
+# Build directory
+build/
+
+# Generated files
+*.o
+*.elf
+*.hex
+*.bin
+*.map
+
+# Debug files
+*.dSYM/
+
+# Environment variables
+.env
+
+# Temporary files
+*.swp
+*~
+
+# IDE specific files
+.idea/
+*.iml
+.vscode/
+
+# Dependencies
+.dependencies
+lib/dependencies/
+
+# Log files
+*.log
