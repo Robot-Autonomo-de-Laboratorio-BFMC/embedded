@@ -1,0 +1,3 @@
+# Python dependencies for tools/scripts (e.g., UART simulator)
+pyserial>=3.5
+

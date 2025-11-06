@@ -14,10 +14,10 @@ except ImportError:
 
 HELP_TEXT = """
 Commands (type and press Enter):
-  speed <0-255>       Set motor speed (CONTROL:SET_SPEED)
-  steer <0-180>       Set steering angle in degrees (CONTROL:SET_STEER)
-  lights <off|on|auto>  Set lights mode (LIGHTS:SET_MODE)
-  emergency           Trigger emergency brake (EMERGENCY:BRAKE_NOW)
+  speed <0-255>       Set motor speed (C:SET_SPEED)
+  steer <0-180>       Set steering angle in degrees (C:SET_STEER)
+  lights <off|on|auto>  Set lights mode (not handled over UART by firmware)
+  emergency           Trigger emergency brake (E:BRAKE_NOW)
   stop                Alias for speed 0
   demo                Send a short demo sequence
   help                Show this help
@@ -78,11 +78,10 @@ def to_mode(value: str) -> int:
 
 def run_demo(ser: serial.Serial, delay_s: float = 0.1) -> None:
     seq = [
-        "CONTROL:SET_SPEED:120",
-        "CONTROL:SET_STEER:90",
-        "LIGHTS:SET_MODE:2",
-        "CONTROL:SET_SPEED:0",
-        "EMERGENCY:BRAKE_NOW:0",
+        "C:SET_SPEED:120",
+        "C:SET_STEER:90",
+        "C:SET_SPEED:0",
+        "E:BRAKE_NOW:0",
     ]
     for cmd in seq:
         print(f"-> {cmd}")
@@ -123,7 +122,7 @@ def interactive_loop(ser: serial.Serial) -> None:
                 if not (0 <= val <= 255):
                     print("Value must be 0..255")
                     continue
-                msg = f"CONTROL:SET_SPEED:{val}"
+                msg = f"C:SET_SPEED:{val}"
                 print(f"-> {msg}")
                 write_line(ser, msg)
             elif cmd == "steer":
@@ -134,7 +133,7 @@ def interactive_loop(ser: serial.Serial) -> None:
                 if not (0 <= val <= 180):
                     print("Value must be 0..180")
                     continue
-                msg = f"CONTROL:SET_STEER:{val}"
+                msg = f"C:SET_STEER:{val}"
                 print(f"-> {msg}")
                 write_line(ser, msg)
             elif cmd == "lights":
@@ -142,15 +141,13 @@ def interactive_loop(ser: serial.Serial) -> None:
                     print("Usage: lights <off|on|auto>")
                     continue
                 mode = to_mode(parts[1])
-                msg = f"LIGHTS:SET_MODE:{mode}"
-                print(f"-> {msg}")
-                write_line(ser, msg)
+                print("(note) Lights over UART not handled by firmware; command skipped")
             elif cmd == "emergency":
-                msg = "EMERGENCY:BRAKE_NOW:0"
+                msg = "E:BRAKE_NOW:0"
                 print(f"-> {msg}")
                 write_line(ser, msg)
             elif cmd == "stop":
-                msg = "CONTROL:SET_SPEED:0"
+                msg = "C:SET_SPEED:0"
                 print(f"-> {msg}")
                 write_line(ser, msg)
             elif cmd == "demo":
@@ -188,7 +185,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="ESP32 UART command simulator (interactive by default)")
     parser.add_argument("port", nargs="?", help="Serial port (e.g., /dev/ttyUSB0, COM5). If omitted, you'll be prompted.")
     parser.add_argument("command", nargs="*", help="Optional raw command(s) to send and exit")
-    parser.add_argument("--baud", type=int, default=921600, help="Baud rate (default: 921600)")
+    parser.add_argument("--baud", type=int, default=115200, help="Baud rate (default: 115200 for USB; use 921600 for Serial1)")
     parser.add_argument("--sleep", type=float, default=0.05, help="Delay between commands in seconds")
     parser.add_argument("--non-interactive", action="store_true", help="Do not run REPL; just send provided commands")
     args = parser.parse_args()

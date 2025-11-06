@@ -62,6 +62,21 @@ static bool parse_uart_message(const char *msg, char *channel, char *cmd, int32_
     return true;
 }
 
+// Read a line (up to newline or carriage return) from a Serial-like stream
+static int read_line_from(Stream &stream, char *buffer, int max_len) {
+    int len = 0;
+    while (stream.available() > 0 && len < max_len - 1) {
+        buffer[len++] = stream.read();
+        if (buffer[len - 1] == '\n' || buffer[len - 1] == '\r') {
+            break;
+        }
+    }
+    if (len > 0) {
+        buffer[len] = '\0';
+    }
+    return len;
+}
+
 void link_rx_task(void *pvParameters) {
     link_rx_params_t *params = (link_rx_params_t *)pvParameters;
     motor_mb = params->motor_mailbox;
@@ -74,13 +89,10 @@ void link_rx_task(void *pvParameters) {
     Serial.println("[LinkRxTask] LinkRx task started");
     
     while (1) {
-        // Read UART data
-        int len = 0;
-        while (Serial1.available() > 0 && len < UART_BUF_SIZE - 1) {
-            data[len++] = Serial1.read();
-            if (data[len - 1] == '\n' || data[len - 1] == '\r') {
-                break;
-            }
+        // Read UART data from USB Serial first (testing over single USB cable), then from Serial1
+        int len = read_line_from(Serial, data, UART_BUF_SIZE);
+        if (len == 0) {
+            len = read_line_from(Serial1, data, UART_BUF_SIZE);
         }
         
         if (len > 0) {

@@ -8,7 +8,7 @@ Sistema de control para auto RC implementado con ESP32, utilizando arquitectura 
 
 ## Características Principales
 
-- **Arquitectura FreeRTOS**: Sistema multitsk con tareas dedicadas por subsistema
+ - **Arquitectura FreeRTOS**: Sistema multitarea con tareas dedicadas por subsistema
 - **Mailbox Pattern**: Comunicación mediante buzones con patrón last-writer-wins (sin colas)
 - **Task Notifications**: Notificaciones eficientes para despertar tareas críticas
 - **Dual Interface**: Control vía UART (921600 baud) y Web (Wi-Fi AP)
@@ -232,6 +232,45 @@ Los parámetros de configuración se definen en `platformio.ini`:
 ## DEMO
 
 https://github.com/nicolas-mangini/esp32-rc-car-mod/assets/72108522/c88e2a87-3ad3-4a92-a44b-5ae4985a6168
+
+## Pruebas / Simulador UART
+
+Para probar el sistema sin la interfaz web, incluimos un simulador UART interactivo.
+
+1) Instalar dependencias de Python:
+
+```bash
+pip install -r test/python/requirements.txt
+```
+
+2) Ejecutar el simulador (modo interactivo):
+
+```bash
+python3 test/python/test_uart_simulator.py
+```
+
+- El simulador auto-detecta puertos y ofrece un REPL con comandos:
+  - `speed <0-255>`
+  - `steer <0-180>`
+  - `lights <off|on|auto>`
+  - `emergency`, `stop`, `demo`, `help`, `quit`
+  - También acepta líneas crudas del protocolo `CHANNEL:CMD:VALUE`.
+
+3) USB vs UART externo
+
+- Conexión por USB (Serial): usar baud 115200 (por defecto del monitor serial). Ejemplo:
+
+```bash
+python3 test/python/test_uart_simulator.py /dev/ttyUSB0 --baud 115200
+```
+
+- Conexión por UART externo en GPIO10 (RX) / GPIO9 (TX): usar baud 921600.
+
+4) Modo no interactivo (envía y sale):
+
+```bash
+python3 test/python/test_uart_simulator.py /dev/ttyUSB0 --non-interactive CONTROL:SET_SPEED:120 LIGHTS:SET_MODE:2
+```
 
 ## Conclusión
 

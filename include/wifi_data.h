@@ -1,3 +1,3 @@
 // Replace the values below with your network credentials.
-#define SSID "YOUR_WIFI_SSID"
-#define PASSWORD "YOUR_WIFI_PASSWORD"
+#define SSID "TP-link_AC1900"
+#define PASSWORD "01423363870"
