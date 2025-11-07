@@ -207,17 +207,6 @@ void web_task(void *pvParameters) {
         system_mode_t mode = supervisor_get_mode();
         system_state_t state = supervisor_get_state();
         
-        // Debug logging
-        Serial.print("[WebTask] Status request - Mode: ");
-        Serial.print(mode == MODE_AUTO ? "AUTO" : "MANUAL");
-        Serial.print(", State: ");
-        Serial.print(state == STATE_DISARMED ? "DISARMED" :
-                     state == STATE_ARMED ? "ARMED" :
-                     state == STATE_RUNNING ? "RUNNING" : "FAULT");
-        Serial.print(" (raw: ");
-        Serial.print(state);
-        Serial.println(")");
-        
         String json = "{\"mode\":\"" + String(mode == MODE_AUTO ? "AUTO" : "MANUAL") + 
                       "\",\"state\":\"" + 
                       String(state == STATE_DISARMED ? "DISARMED" :

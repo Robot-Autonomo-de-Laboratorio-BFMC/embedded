@@ -42,29 +42,24 @@ void link_tx_task(void *pvParameters) {
             
             switch (msg.type) {
                 case MSG_TYPE_STATUS:
-                    snprintf(buffer, sizeof(buffer), "STATUS:MODE=%s,STATE=%s,HB=%lu\n",
-                             msg.mode == MODE_AUTO ? "AUTO" : "MANUAL",
-                             msg.state == STATE_DISARMED ? "DISARMED" :
-                             msg.state == STATE_ARMED ? "ARMED" :
-                             msg.state == STATE_RUNNING ? "RUNNING" : "FAULT",
-                             (unsigned long)msg.heartbeat_age_ms);
-                    break;
+                    // STATUS messages disabled - use events instead
+                    // Skip sending STATUS messages to reduce noise
+                    continue; // Skip to next iteration
                     
                 case MSG_TYPE_STATE_EVENT:
                     snprintf(buffer, sizeof(buffer), "EVENT:STATE=%s\n",
                              msg.state == STATE_DISARMED ? "DISARMED" :
                              msg.state == STATE_ARMED ? "ARMED" :
                              msg.state == STATE_RUNNING ? "RUNNING" : "FAULT");
+                    Serial1.print(buffer);
                     break;
                     
                 case MSG_TYPE_MODE_EVENT:
                     snprintf(buffer, sizeof(buffer), "EVENT:MODE=%s\n",
                              msg.mode == MODE_AUTO ? "AUTO" : "MANUAL");
+                    Serial1.print(buffer);
                     break;
             }
-            
-            Serial1.print(buffer);
-            // Debug logging removed to reduce noise - use telemetry_monitor.py to see TX messages
         }
     }
 }

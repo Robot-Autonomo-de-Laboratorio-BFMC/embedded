@@ -127,9 +127,8 @@ void supervisor_task(void *pvParameters) {
             previous_state = current_state;
         }
         
-        // Send telemetry
-        uint32_t heartbeat_age = (last_heartbeat_ms > 0) ? (current_ms - last_heartbeat_ms) : 0;
-        link_tx_send_status(current_mode, current_state, heartbeat_age);
+        // Periodic STATUS messages removed - use M:GET_STATUS:0 to request status on demand
+        // or use telemetry_monitor.py to see all telemetry
         
         vTaskDelay(pdMS_TO_TICKS(SUPERVISOR_TASK_PERIOD_MS));
     }
