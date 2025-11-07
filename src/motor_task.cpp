@@ -20,6 +20,8 @@ void motor_task(void *pvParameters)
     motor_task_handle = xTaskGetCurrentTaskHandle();
 
     uint8_t current_speed = 0;
+    uint8_t last_valid_speed = 0; // Store last valid speed command
+    bool has_received_speed_command = false; // Track if we've ever received a speed command
     bool motor_direction = true; // forward
     bool has_valid_command = false;
     uint32_t last_stop_timestamp = 0;
@@ -30,6 +32,22 @@ void motor_task(void *pvParameters)
     while (1)
     {
         uint32_t current_time = xTaskGetTickCount() * portTICK_PERIOD_MS;
+        
+        // Check for emergency notifications FIRST (<1ms response) - before cooldown check
+        uint32_t notification_value = ulTaskNotifyTake(pdTRUE, 0); // Clear notification bits
+        if (notification_value > 0)
+        {
+            Serial.println("[MotorTask] Emergency brake triggered!");
+            motor_stop();
+            lights_set_reverse(false);
+            current_speed = 0;
+            has_valid_command = false;
+            // Don't reset last_valid_speed or has_received_speed_command - keep them for after cooldown
+            last_stop_timestamp = current_time;
+            in_cooldown = true;
+            Serial.println("[MotorTask] 5 second cooldown started");
+            // Don't continue here - let it fall through to ensure motor stays stopped in cooldown check
+        }
         
         // Check if cooldown period has elapsed
         if (last_stop_timestamp > 0)
@@ -49,22 +67,6 @@ void motor_task(void *pvParameters)
         else
         {
             in_cooldown = false;
-        }
-
-        // Check for emergency notifications first (<1ms response)
-        uint32_t notification_value = ulTaskNotifyTake(pdTRUE, 0);
-        if (notification_value & EMERGENCY_NOTIFICATION_BIT)
-        {
-            Serial.println("[MotorTask] Emergency brake triggered!");
-            motor_stop();
-            lights_set_reverse(false);
-            current_speed = 0;
-            has_valid_command = false;
-            last_stop_timestamp = current_time;
-            in_cooldown = true;
-            Serial.println("[MotorTask] 5 second cooldown started");
-            vTaskDelay(pdMS_TO_TICKS(MOTOR_TASK_PERIOD_MS));
-            continue;
         }
 
         // Read mailbox for motor commands
@@ -97,6 +99,8 @@ void motor_task(void *pvParameters)
                         {
                             current_speed = MOTOR_SPEED_MAX;
                         }
+                        last_valid_speed = current_speed; // Store last valid speed
+                        has_received_speed_command = true; // Mark that we've received a speed command
                         // Ensure forward direction when setting speed
                         motor_set_direction(true);
                         motor_set_speed(current_speed);
@@ -111,6 +115,7 @@ void motor_task(void *pvParameters)
                     lights_set_reverse(false);
                     current_speed = 0;
                     motor_direction = true;
+                    // Don't reset last_valid_speed or has_received_speed_command - keep them for after cooldown
                     last_stop_timestamp = current_time;
                     in_cooldown = true;
                     Serial.println("[MotorTask] Motor stopped (brake/stop command), 5 second cooldown started");
@@ -122,20 +127,34 @@ void motor_task(void *pvParameters)
             }
         }
 
-        // Default behavior: if no valid command received and not in cooldown, move forward at default speed
-        if (!has_valid_command && !in_cooldown)
+        // Apply motor control based on state
+        if (in_cooldown)
         {
-            current_speed = DEFAULT_FORWARD_SPEED;
+            // Ensure motor stays stopped during cooldown
+            motor_stop();
+            current_speed = 0;
+        }
+        else if (has_valid_command)
+        {
+            // Valid command is already applied above, nothing to do here
+        }
+        else if (has_received_speed_command)
+        {
+            // Command expired, but maintain last valid speed (don't revert to default)
+            current_speed = last_valid_speed;
             motor_set_direction(true);
             motor_set_speed(current_speed);
             motor_direction = true;
             lights_set_reverse(false);
         }
-        else if (in_cooldown)
+        else
         {
-            // Ensure motor stays stopped during cooldown
-            motor_stop();
-            current_speed = 0;
+            // No speed command ever received, use default forward behavior
+            current_speed = DEFAULT_FORWARD_SPEED;
+            motor_set_direction(true);
+            motor_set_speed(current_speed);
+            motor_direction = true;
+            lights_set_reverse(false);
         }
 
         vTaskDelay(pdMS_TO_TICKS(MOTOR_TASK_PERIOD_MS));
