@@ -2,7 +2,9 @@
 import sys
 import time
 import argparse
+import threading
 from typing import List
+from queue import Queue
 
 try:
     import serial  # pyserial
@@ -19,6 +21,9 @@ Commands (type and press Enter):
   lights <off|on|auto>  Set lights mode (not handled over UART by firmware)
   emergency           Trigger emergency brake (E:BRAKE_NOW)
   stop                Alias for speed 0
+  arm                 Arm the system (M:SYS_ARM) - REQUIRED before control commands
+  disarm              Disarm the system (M:SYS_DISARM)
+  mode <manual|auto>  Set system mode (M:SYS_MODE)
   demo                Send a short demo sequence
   help                Show this help
   quit / exit         Leave the simulator
@@ -65,6 +70,19 @@ def read_available(ser: serial.Serial) -> List[str]:
     return lines
 
 
+def serial_reader_thread(ser: serial.Serial, output_queue: Queue) -> None:
+    """Background thread that continuously reads from serial and puts lines in queue."""
+    while True:
+        try:
+            data = ser.readline()
+            if data:
+                line = data.decode(errors="ignore").rstrip()
+                if line:
+                    output_queue.put(("serial", line))
+        except Exception:
+            break
+
+
 def to_mode(value: str) -> int:
     v = value.lower()
     if v in ("off", "0"):
@@ -79,11 +97,22 @@ def to_mode(value: str) -> int:
 def run_demo(ser: serial.Serial, delay_s: float = 0.05) -> None:
     """
     Demo: Simulate making a corner
+    - Arm the system first
     - Start at max speed (255) going forward
     - Turn degree by degree to the right while moving forward
     - Stop at the end
     """
     print("Starting corner demo...")
+    
+    # Arm the system first
+    print("-> M:SYS_ARM:0")
+    write_line(ser, "M:SYS_ARM:0")
+    time.sleep(delay_s * 2)
+    
+    # Set mode to AUTO (so it transitions to RUNNING with heartbeat)
+    print("-> M:SYS_MODE:1")
+    write_line(ser, "M:SYS_MODE:1")
+    time.sleep(delay_s * 2)
     
     # Start with max speed forward
     print("-> C:SET_SPEED:255")
@@ -120,18 +149,41 @@ def run_demo(ser: serial.Serial, delay_s: float = 0.05) -> None:
 
 def interactive_loop(ser: serial.Serial) -> None:
     print("Interactive UART simulator. Type 'help' for commands. Ctrl+C to quit.")
+    print("(All serial output from ESP32 will be shown in real-time)")
     print(HELP_TEXT)
+    
+    # Start background thread to read serial continuously
+    output_queue: Queue = Queue()
+    reader_thread = threading.Thread(target=serial_reader_thread, args=(ser, output_queue), daemon=True)
+    reader_thread.start()
+    
     while True:
+        # Check for serial output
         try:
+            while True:
+                source, line = output_queue.get_nowait()
+                if source == "serial":
+                    print(f"<- {line}")
+        except:
+            pass
+        
+        try:
+            # Use timeout for input to allow checking queue periodically
+            # Note: This requires a more complex approach on Windows
+            # For now, we'll check queue before each input
             raw = input("> ").strip()
         except (EOFError, KeyboardInterrupt):
             print()
             break
         if not raw:
             # show any pending output
-            for ln in read_available(ser):
-                if ln:
-                    print(f"<- {ln}")
+            try:
+                while True:
+                    source, line = output_queue.get_nowait()
+                    if source == "serial":
+                        print(f"<- {line}")
+            except:
+                pass
             continue
         parts = raw.split()
         cmd = parts[0].lower()
@@ -176,6 +228,29 @@ def interactive_loop(ser: serial.Serial) -> None:
                 msg = "C:SET_SPEED:0"
                 print(f"-> {msg}")
                 write_line(ser, msg)
+            elif cmd == "arm":
+                msg = "M:SYS_ARM:0"
+                print(f"-> {msg}")
+                write_line(ser, msg)
+                print("(note) System must be ARMED before control commands work")
+            elif cmd == "disarm":
+                msg = "M:SYS_DISARM:0"
+                print(f"-> {msg}")
+                write_line(ser, msg)
+            elif cmd == "mode":
+                if len(parts) != 2:
+                    print("Usage: mode <manual|auto>")
+                    continue
+                mode_val = parts[1].lower()
+                if mode_val == "auto":
+                    msg = "M:SYS_MODE:1"
+                elif mode_val == "manual":
+                    msg = "M:SYS_MODE:0"
+                else:
+                    print("Mode must be 'manual' or 'auto'")
+                    continue
+                print(f"-> {msg}")
+                write_line(ser, msg)
             elif cmd == "demo":
                 run_demo(ser)
             else:
@@ -185,11 +260,15 @@ def interactive_loop(ser: serial.Serial) -> None:
                     write_line(ser, raw)
                 else:
                     print("Unknown command. Type 'help'.")
-            # print any immediate replies
+            # Check for any serial output after sending command
             time.sleep(0.05)
-            for ln in read_available(ser):
-                if ln:
-                    print(f"<- {ln}")
+            try:
+                while True:
+                    source, line = output_queue.get_nowait()
+                    if source == "serial":
+                        print(f"<- {line}")
+            except:
+                pass
         except ValueError as ve:
             print(f"Error: {ve}")
         except Exception as ex:

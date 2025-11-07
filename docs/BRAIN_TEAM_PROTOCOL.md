@@ -2,6 +2,18 @@
 
 Este documento describe cómo enviar comandos desde el sistema Brain (Jetson/PC) hacia el ESP32 que controla los motores, dirección y luces del vehículo.
 
+## ⚠️ IMPORTANTE: Sistema de Seguridad (ARM/DISARM)
+
+**El sistema inicia DESARMADO por defecto.** Debes armar el sistema antes de que los comandos de control funcionen.
+
+**Secuencia de inicio:**
+1. Armar el sistema: `M:SYS_ARM:0`
+2. Establecer modo: `M:SYS_MODE:1` (AUTO) o `M:SYS_MODE:0` (MANUAL)
+3. En modo AUTO: el sistema pasa a RUNNING automáticamente cuando recibe heartbeat
+4. En modo MANUAL: el sistema necesita estar en estado RUNNING (requiere ARM + modo MANUAL)
+
+**Los comandos de control (SET_SPEED, SET_STEER) solo funcionan cuando el sistema está ARMED y RUNNING.**
+
 ## Formato de Comandos
 
 Todos los comandos deben seguir el formato:
@@ -118,18 +130,20 @@ Alias para freno de emergencia (mismo comportamiento que BRAKE_NOW).
 ### Canal MANAGEMENT (`M`)
 
 #### `M:SYS_ARM:0`
-Arma el sistema (prepara para operación).
+**⚠️ REQUERIDO** - Arma el sistema (prepara para operación). Debe enviarse antes de cualquier comando de control.
 
 - **Valor**: Siempre 0
 - **TTL**: 5000ms
 - **Ejemplo**: `M:SYS_ARM:0`
+- **Nota**: Sin ARM, los comandos SET_SPEED y SET_STEER serán ignorados
 
 #### `M:SYS_DISARM:0`
-Desarma el sistema (modo seguro).
+Desarma el sistema (modo seguro). Detiene el vehículo inmediatamente.
 
 - **Valor**: Siempre 0
 - **TTL**: 5000ms
 - **Ejemplo**: `M:SYS_DISARM:0`
+- **Efecto**: Detiene motor y centra dirección
 
 #### `M:SYS_MODE:<valor>`
 Establece el modo del sistema.
@@ -137,6 +151,7 @@ Establece el modo del sistema.
 - **Valor**: 0 = MANUAL, 1 = AUTO
 - **TTL**: 5000ms
 - **Ejemplo**: `M:SYS_MODE:1` (modo AUTO)
+- **Nota**: En modo AUTO, el sistema pasa a RUNNING automáticamente cuando recibe heartbeat
 
 ## Ejemplos de Uso
 
@@ -147,16 +162,19 @@ import serial
 
 ser = serial.Serial('/dev/ttyUSB0', baudrate=115200, timeout=1)
 
-# Armar sistema
+# 1. Armar sistema (REQUERIDO)
 ser.write(b"M:SYS_ARM:0\n")
+time.sleep(0.1)
 
-# Establecer velocidad
+# 2. Establecer modo AUTO (opcional, pero recomendado)
+ser.write(b"M:SYS_MODE:1\n")  # 1 = AUTO, 0 = MANUAL
+time.sleep(0.1)
+
+# 3. Ahora los comandos de control funcionarán
 ser.write(b"C:SET_SPEED:150\n")
-
-# Centrar dirección
 ser.write(b"C:SET_STEER:105\n")
 
-# Frenar de emergencia
+# Frenar de emergencia (funciona siempre, incluso sin ARM)
 ser.write(b"E:BRAKE_NOW:0\n")
 ```
 
@@ -167,6 +185,12 @@ import serial
 import time
 
 ser = serial.Serial('/dev/ttyUSB0', baudrate=115200, timeout=1)
+
+# INICIALIZACIÓN: Armar y configurar modo
+ser.write(b"M:SYS_ARM:0\n")
+time.sleep(0.1)
+ser.write(b"M:SYS_MODE:1\n")  # Modo AUTO
+time.sleep(0.1)
 
 def degrees_to_servo(degrees, max_degrees=45):
     SERVO_CENTER = 105
@@ -184,7 +208,7 @@ while True:
     command = f"C:SET_STEER:{servo_value}\n"
     ser.write(command.encode())
     
-    # Mantener velocidad constante
+    # Mantener velocidad constante (heartbeat implícito en cada comando)
     ser.write(b"C:SET_SPEED:120\n")
     
     time.sleep(0.05)  # 20 Hz update rate

@@ -17,6 +17,7 @@ static mailbox_t *steer_mb = NULL;
 
 static system_mode_t current_mode = MODE_MANUAL;
 static system_state_t current_state = STATE_DISARMED;
+static system_state_t previous_state = STATE_DISARMED;
 static uint32_t last_heartbeat_ms = 0;
 static bool estop_triggered = false;
 
@@ -46,20 +47,31 @@ void supervisor_task(void *pvParameters) {
                             current_state = STATE_ARMED;
                             last_heartbeat_ms = current_ms;
                             Serial.println("[SupervisorTask] System ARMED");
+                            link_tx_send_state_event(current_state);
                         }
+                        // If already armed, don't print again
                         break;
                         
                     case CMD_SYS_DISARM:
-                        current_state = STATE_DISARMED;
-                        motor_stop();
-                        steer_set_angle(SERVO_CENTER);
-                        Serial.println("[SupervisorTask] System DISARMED");
+                        if (current_state != STATE_DISARMED) {
+                            current_state = STATE_DISARMED;
+                            motor_stop();
+                            steer_set_angle(SERVO_CENTER);
+                            Serial.println("[SupervisorTask] System DISARMED");
+                            link_tx_send_state_event(current_state);
+                        }
                         break;
                         
                     case CMD_SYS_MODE:
-                        current_mode = (value == MODE_AUTO) ? MODE_AUTO : MODE_MANUAL;
-                        Serial.print("[SupervisorTask] Mode changed to: ");
-                        Serial.println(current_mode == MODE_AUTO ? "AUTO" : "MANUAL");
+                        {
+                            system_mode_t new_mode = (value == MODE_AUTO) ? MODE_AUTO : MODE_MANUAL;
+                            if (new_mode != current_mode) {
+                                current_mode = new_mode;
+                                Serial.print("[SupervisorTask] Mode changed to: ");
+                                Serial.println(current_mode == MODE_AUTO ? "AUTO" : "MANUAL");
+                                link_tx_send_mode_event(current_mode);
+                            }
+                        }
                         break;
                         
                     default:
@@ -97,11 +109,22 @@ void supervisor_task(void *pvParameters) {
         }
         
         // State machine transitions
-        if (current_state == STATE_ARMED && current_mode == MODE_AUTO) {
-            // Transition to RUNNING if we have valid heartbeat
-            if (last_heartbeat_ms > 0 && (current_ms - last_heartbeat_ms) < WATCHDOG_TIMEOUT_MS) {
+        if (current_state == STATE_ARMED) {
+            if (current_mode == MODE_AUTO) {
+                // In AUTO mode, transition to RUNNING if we have valid heartbeat
+                if (last_heartbeat_ms > 0 && (current_ms - last_heartbeat_ms) < WATCHDOG_TIMEOUT_MS) {
+                    current_state = STATE_RUNNING;
+                }
+            } else {
+                // In MANUAL mode, ARMED automatically transitions to RUNNING
                 current_state = STATE_RUNNING;
             }
+        }
+        
+        // Send event if state changed (for automatic transitions)
+        if (current_state != previous_state) {
+            link_tx_send_state_event(current_state);
+            previous_state = current_state;
         }
         
         // Send telemetry

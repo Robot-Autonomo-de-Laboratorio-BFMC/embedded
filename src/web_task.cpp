@@ -78,7 +78,22 @@ void web_task(void *pvParameters) {
         server.send(200, "text/plain", "driveStop");
     });
     
-    // Steering control
+    // Steering control with degrees
+    server.on("/steer", []() {
+        String angle_str = server.arg("angle");
+        if (supervisor_get_mode() == MODE_MANUAL && supervisor_get_state() == STATE_RUNNING) {
+            if (steer_mb != NULL && angle_str.length() > 0) {
+                int angle = angle_str.toInt();
+                // Clamp angle to valid range (50-135)
+                if (angle < SERVO_LEFT) angle = SERVO_LEFT;
+                if (angle > SERVO_RIGHT) angle = SERVO_RIGHT;
+                mailbox_write(steer_mb, TOPIC_STEER, CMD_SET_STEER, angle, 200);
+            }
+        }
+        server.send(200, "text/plain", "OK");
+    });
+    
+    // Legacy endpoints for backward compatibility
     server.on("/left", []() {
         if (supervisor_get_mode() == MODE_MANUAL && supervisor_get_state() == STATE_RUNNING) {
             if (steer_mb != NULL) {
@@ -100,7 +115,7 @@ void web_task(void *pvParameters) {
     server.on("/steerStop", []() {
         if (supervisor_get_mode() == MODE_MANUAL) {
             if (steer_mb != NULL) {
-                mailbox_write(steer_mb, TOPIC_STEER, CMD_STOP, 0, 100);
+                mailbox_write(steer_mb, TOPIC_STEER, CMD_SET_STEER, SERVO_CENTER, 200);
             }
         }
         server.send(200, "text/plain", "steerStop");
@@ -128,20 +143,35 @@ void web_task(void *pvParameters) {
         server.send(200, "text/plain", "Luces bajas automaticas");
     });
     
-    // Speed control
+    // Speed control with direction
     server.on("/changeSpeed", []() {
         String speed_str = server.arg("speed");
-        if (speed_str.length() > 0) {
-            int speed = speed_str.toInt();
-            if (speed >= 0 && speed <= MOTOR_SPEED_MAX) {
-                if (motor_mb != NULL) {
-                    mailbox_write(motor_mb, TOPIC_MOTOR, CMD_SET_SPEED, speed, 200);
+        String direction_str = server.arg("direction");
+        
+        if (supervisor_get_mode() == MODE_MANUAL && supervisor_get_state() == STATE_RUNNING) {
+            if (speed_str.length() > 0) {
+                int speed = speed_str.toInt();
+                if (speed >= 0 && speed <= MOTOR_SPEED_MAX) {
+                    if (motor_mb != NULL) {
+                        if (speed == 0) {
+                            // Stop
+                            mailbox_write(motor_mb, TOPIC_MOTOR, CMD_STOP, 0, 200);
+                        } else {
+                            // Set speed and direction
+                            mailbox_write(motor_mb, TOPIC_MOTOR, CMD_SET_SPEED, speed, 200);
+                            if (direction_str == "backward") {
+                                motor_set_direction(false);
+                            } else {
+                                motor_set_direction(true); // forward or default
+                            }
+                        }
+                    }
+                    server.send(200, "text/plain", "OK");
+                    return;
                 }
-                server.send(200, "text/plain", "Velocidad limitada a " + speed_str);
-                return;
             }
         }
-        server.send(400, "text/plain", "Invalid speed");
+        server.send(400, "text/plain", "Invalid speed or not in manual mode");
     });
     
     // System control
@@ -176,6 +206,18 @@ void web_task(void *pvParameters) {
     server.on("/status", []() {
         system_mode_t mode = supervisor_get_mode();
         system_state_t state = supervisor_get_state();
+        
+        // Debug logging
+        Serial.print("[WebTask] Status request - Mode: ");
+        Serial.print(mode == MODE_AUTO ? "AUTO" : "MANUAL");
+        Serial.print(", State: ");
+        Serial.print(state == STATE_DISARMED ? "DISARMED" :
+                     state == STATE_ARMED ? "ARMED" :
+                     state == STATE_RUNNING ? "RUNNING" : "FAULT");
+        Serial.print(" (raw: ");
+        Serial.print(state);
+        Serial.println(")");
+        
         String json = "{\"mode\":\"" + String(mode == MODE_AUTO ? "AUTO" : "MANUAL") + 
                       "\",\"state\":\"" + 
                       String(state == STATE_DISARMED ? "DISARMED" :

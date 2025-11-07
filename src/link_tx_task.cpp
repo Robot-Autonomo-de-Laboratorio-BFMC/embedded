@@ -10,7 +10,14 @@
 
 #define TX_QUEUE_SIZE 10
 
+typedef enum {
+    MSG_TYPE_STATUS,
+    MSG_TYPE_STATE_EVENT,
+    MSG_TYPE_MODE_EVENT
+} msg_type_t;
+
 typedef struct {
+    msg_type_t type;
     system_mode_t mode;
     system_state_t state;
     uint32_t heartbeat_age_ms;
@@ -32,14 +39,33 @@ void link_tx_task(void *pvParameters) {
         telemetry_msg_t msg;
         if (xQueueReceive(tx_queue, &msg, pdMS_TO_TICKS(100)) == pdTRUE) {
             char buffer[128];
-            snprintf(buffer, sizeof(buffer), "STATUS:MODE=%s,STATE=%s,HB=%lu\n",
-                     msg.mode == MODE_AUTO ? "AUTO" : "MANUAL",
-                     msg.state == STATE_DISARMED ? "DISARMED" :
-                     msg.state == STATE_ARMED ? "ARMED" :
-                     msg.state == STATE_RUNNING ? "RUNNING" : "FAULT",
-                     (unsigned long)msg.heartbeat_age_ms);
+            
+            switch (msg.type) {
+                case MSG_TYPE_STATUS:
+                    snprintf(buffer, sizeof(buffer), "STATUS:MODE=%s,STATE=%s,HB=%lu\n",
+                             msg.mode == MODE_AUTO ? "AUTO" : "MANUAL",
+                             msg.state == STATE_DISARMED ? "DISARMED" :
+                             msg.state == STATE_ARMED ? "ARMED" :
+                             msg.state == STATE_RUNNING ? "RUNNING" : "FAULT",
+                             (unsigned long)msg.heartbeat_age_ms);
+                    break;
+                    
+                case MSG_TYPE_STATE_EVENT:
+                    snprintf(buffer, sizeof(buffer), "EVENT:STATE=%s\n",
+                             msg.state == STATE_DISARMED ? "DISARMED" :
+                             msg.state == STATE_ARMED ? "ARMED" :
+                             msg.state == STATE_RUNNING ? "RUNNING" : "FAULT");
+                    break;
+                    
+                case MSG_TYPE_MODE_EVENT:
+                    snprintf(buffer, sizeof(buffer), "EVENT:MODE=%s\n",
+                             msg.mode == MODE_AUTO ? "AUTO" : "MANUAL");
+                    break;
+            }
             
             Serial1.print(buffer);
+            Serial.print("[LinkTxTask] TX: ");
+            Serial.print(buffer);
         }
     }
 }
@@ -47,9 +73,34 @@ void link_tx_task(void *pvParameters) {
 void link_tx_send_status(system_mode_t mode, system_state_t state, uint32_t heartbeat_age_ms) {
     if (tx_queue != NULL) {
         telemetry_msg_t msg = {
+            .type = MSG_TYPE_STATUS,
             .mode = mode,
             .state = state,
             .heartbeat_age_ms = heartbeat_age_ms
+        };
+        xQueueSend(tx_queue, &msg, 0); // Non-blocking
+    }
+}
+
+void link_tx_send_state_event(system_state_t state) {
+    if (tx_queue != NULL) {
+        telemetry_msg_t msg = {
+            .type = MSG_TYPE_STATE_EVENT,
+            .mode = MODE_MANUAL, // Not used for state events
+            .state = state,
+            .heartbeat_age_ms = 0
+        };
+        xQueueSend(tx_queue, &msg, 0); // Non-blocking
+    }
+}
+
+void link_tx_send_mode_event(system_mode_t mode) {
+    if (tx_queue != NULL) {
+        telemetry_msg_t msg = {
+            .type = MSG_TYPE_MODE_EVENT,
+            .mode = mode,
+            .state = STATE_DISARMED, // Not used for mode events
+            .heartbeat_age_ms = 0
         };
         xQueueSend(tx_queue, &msg, 0); // Non-blocking
     }
