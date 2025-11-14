@@ -171,7 +171,7 @@ def open_serial(port: str, baud: int = UART_BAUD_RATE):
     ser = serial.Serial(
         port=port,
         baudrate=baud,
-        timeout=1.0,
+        timeout=0.1,  # Shorter timeout for more responsive reading
         write_timeout=1.0,
         bytesize=serial.EIGHTBITS,
         parity=serial.PARITY_NONE,
@@ -191,20 +191,27 @@ def read_available_lines(ser):
         return lines
     
     try:
-        while True:
-            data = ser.readline()
-            if not data:
-                break
-            try:
-                line = data.decode('utf-8', errors='ignore').rstrip()
-                # Debug: print raw data to see what we're receiving
-                if len(data) > 0:
-                    print(f"[DEBUG] Raw data: {repr(data)}, Decoded: {repr(line)}", file=sys.stderr)
+        # Read all available data first
+        available = ser.in_waiting
+        if available > 0:
+            # Read in chunks to avoid blocking
+            data = ser.read(available)
+            # Split by newlines and process each line
+            buffer = data.decode('utf-8', errors='ignore')
+            for line in buffer.split('\n'):
+                line = line.strip()
                 if line:
                     lines.append(line)
-            except Exception as e:
-                print(f"[DEBUG] Decode error: {e}, data: {repr(data)}", file=sys.stderr)
-                pass
+        else:
+            # If no data available, try readline with short timeout
+            try:
+                data = ser.readline()
+                if data:
+                    line = data.decode('utf-8', errors='ignore').rstrip()
+                    if line:
+                        lines.append(line)
+            except:
+                pass  # Timeout is expected when no data
     except Exception as e:
         print(f"[DEBUG] Read error: {e}", file=sys.stderr)
         pass

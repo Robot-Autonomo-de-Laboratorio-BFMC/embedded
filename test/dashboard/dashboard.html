@@ -414,8 +414,8 @@
         // Auto-detect server URL (same origin)
         let serverURL = window.location.origin;
         let isConnected = false;
-        let statusUpdateInterval = null;
         let serialEventSource = null;
+        let statusFallbackInterval = null;
 
         function getBaseURL() {
             return serverURL;
@@ -452,6 +452,16 @@
                 serialEventSource = null;
             }
 
+            // Start fallback polling for status (every 5 seconds as backup)
+            if (statusFallbackInterval) {
+                clearInterval(statusFallbackInterval);
+            }
+            statusFallbackInterval = setInterval(() => {
+                if (isConnected) {
+                    updateStatus();
+                }
+            }, 5000); // Fallback every 5 seconds
+
             // Start SSE stream for serial messages
             const streamURL = `${getBaseURL()}/uart/stream`;
             serialEventSource = new EventSource(streamURL);
@@ -462,6 +472,66 @@
                 console.log('SSE message received:', message);
                 if (message && message.trim().length > 0) {
                     log(`ESP32: ${message}`, 'serial');
+                    
+                    // Parse system events and update status in real-time
+                    if (message.startsWith('EVENT:STATE_CHANGED:')) {
+                        const state = message.replace('EVENT:STATE_CHANGED:', '').trim();
+                        updateStatusDisplay(state, null);
+                    } else if (message.startsWith('EVENT:MODE_CHANGED:')) {
+                        const mode = message.replace('EVENT:MODE_CHANGED:', '').trim();
+                        updateStatusDisplay(null, mode);
+                    } else if (message.startsWith('EVENT:CMD_EXECUTED:SET_SPEED:')) {
+                        // Update speed slider and display
+                        const speedStr = message.replace('EVENT:CMD_EXECUTED:SET_SPEED:', '').trim();
+                        const speed = parseInt(speedStr);
+                        if (!isNaN(speed)) {
+                            const speedSlider = document.getElementById('speed-slider');
+                            const speedValue = document.getElementById('speed-value');
+                            const speedDisplay = document.getElementById('speed-display');
+                            
+                            if (speedSlider && speedValue && speedDisplay) {
+                                speedSlider.value = speed;
+                                speedValue.textContent = speed;
+                                speedDisplay.textContent = speed === 0 ? 'Stopped: 0' : `Speed: ${speed}`;
+                            }
+                        }
+                    } else if (message.startsWith('EVENT:CMD_EXECUTED:SET_STEER:')) {
+                        // Update steering slider and display
+                        const angleStr = message.replace('EVENT:CMD_EXECUTED:SET_STEER:', '').trim();
+                        const angle = parseInt(angleStr);
+                        if (!isNaN(angle)) {
+                            const steerSlider = document.getElementById('steer-slider');
+                            const steerValue = document.getElementById('steer-value');
+                            const steerDisplay = document.getElementById('steer-display');
+                            
+                            if (steerSlider && steerValue && steerDisplay) {
+                                steerSlider.value = angle;
+                                steerValue.textContent = `${angle}°`;
+                                
+                                const center = 105;
+                                const displayAngle = angle - center;
+                                if (displayAngle === 0) {
+                                    steerDisplay.textContent = 'Center: 105°';
+                                } else if (displayAngle > 0) {
+                                    steerDisplay.textContent = `Right: ${angle}°`;
+                                } else {
+                                    steerDisplay.textContent = `Left: ${angle}°`;
+                                }
+                            }
+                        }
+                    } else if (message === 'EVENT:CMD_EXECUTED:SET_STEER_CENTER') {
+                        // Center steering
+                        const steerSlider = document.getElementById('steer-slider');
+                        const steerValue = document.getElementById('steer-value');
+                        const steerDisplay = document.getElementById('steer-display');
+                        
+                        if (steerSlider && steerValue && steerDisplay) {
+                            const center = 105;
+                            steerSlider.value = center;
+                            steerValue.textContent = `${center}°`;
+                            steerDisplay.textContent = 'Center: 105°';
+                        }
+                    }
                 } else {
                     console.warn('Received empty SSE message');
                 }
@@ -485,6 +555,11 @@
                 serialEventSource.close();
                 serialEventSource = null;
                 log('Serial stream stopped', 'info');
+            }
+            // Stop fallback polling
+            if (statusFallbackInterval) {
+                clearInterval(statusFallbackInterval);
+                statusFallbackInterval = null;
             }
         }
 
@@ -516,6 +591,23 @@
             }
         }
 
+        function updateStatusDisplay(state, mode) {
+            // Update state if provided
+            if (state !== null) {
+                document.getElementById('status-state').textContent = state;
+                const stateEl = document.getElementById('status-state');
+                stateEl.className = 'status-value ' + state.toLowerCase();
+            }
+            
+            // Update mode if provided
+            if (mode !== null) {
+                document.getElementById('status-mode').textContent = mode;
+            }
+            
+            // Always update timestamp when status changes
+            document.getElementById('status-time').textContent = new Date().toLocaleTimeString();
+        }
+
         async function updateStatus() {
             if (!isConnected) {
                 document.getElementById('status-mode').textContent = '--';
@@ -525,21 +617,13 @@
             }
 
             try {
-                // Get system status (mode and state)
+                // Get system status (mode and state) - fallback polling
                 const statusResponse = await fetch(`${getBaseURL()}/status`, {
                     cache: 'no-cache'
                 });
                 if (statusResponse.ok) {
                     const statusData = await statusResponse.json();
-                    document.getElementById('status-mode').textContent = statusData.mode || '--';
-                    document.getElementById('status-state').textContent = statusData.state || '--';
-                    
-                    // Update state color
-                    const stateEl = document.getElementById('status-state');
-                    const state = (statusData.state || '').toLowerCase();
-                    stateEl.className = 'status-value ' + state;
-                    
-                    document.getElementById('status-time').textContent = new Date().toLocaleTimeString();
+                    updateStatusDisplay(statusData.state || null, statusData.mode || null);
                 }
             } catch (error) {
                 // Silently fail - status update is not critical
@@ -629,14 +713,10 @@
                     updateConnectionStatus(true);
                     log(`Connected to ${data.port} at ${data.baudrate} baud`, 'success');
                     
-                    // Start periodic status updates
-                    if (statusUpdateInterval) {
-                        clearInterval(statusUpdateInterval);
-                    }
-                    statusUpdateInterval = setInterval(updateStatus, 1000);
+                    // Get initial status once
                     updateStatus();
                     
-                    // Start listening to serial messages from ESP32
+                    // Start listening to serial messages from ESP32 (will update status via events)
                     startSerialStream();
                 } else {
                     const errorData = await response.json();
@@ -660,10 +740,10 @@
                     // Stop serial stream
                     stopSerialStream();
                     
-                    if (statusUpdateInterval) {
-                        clearInterval(statusUpdateInterval);
-                        statusUpdateInterval = null;
-                    }
+                    // Reset status display
+                    document.getElementById('status-mode').textContent = '--';
+                    document.getElementById('status-state').textContent = 'DISCONNECTED';
+                    document.getElementById('status-time').textContent = '--';
                 }
             } catch (error) {
                 log(`Disconnect error: ${error.message}`, 'error');
@@ -730,13 +810,9 @@
                             portSelect.value = data.uart_port;
                         }
                         log(`Already connected to serial port: ${data.uart_port}`, 'success');
-                        // Start periodic status updates
-                        if (statusUpdateInterval) {
-                            clearInterval(statusUpdateInterval);
-                        }
-                        statusUpdateInterval = setInterval(updateStatus, 1000);
+                        // Get initial status once
                         updateStatus();
-                        // Start listening to serial messages from ESP32
+                        // Start listening to serial messages from ESP32 (will update status via events)
                         startSerialStream();
                     } else {
                         updateConnectionStatus(false);
