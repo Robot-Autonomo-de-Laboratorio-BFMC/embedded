@@ -37,6 +37,8 @@ void motor_task(void *pvParameters)
         uint32_t notification_value = ulTaskNotifyTake(pdTRUE, 0); // Clear notification bits
         if (notification_value > 0)
         {
+            Serial.println("EVENT:CMD_EXECUTED:EMERGENCY_BRAKE");
+            Serial.flush();
             Serial.println("[MotorTask] Emergency brake triggered!");
             motor_stop();
             lights_set_reverse(false);
@@ -94,23 +96,41 @@ void motor_task(void *pvParameters)
                     }
                     else
                     {
-                        current_speed = (uint8_t)value;
-                        if (current_speed > MOTOR_SPEED_MAX)
+                        uint8_t new_speed = (uint8_t)value;
+                        if (new_speed > MOTOR_SPEED_MAX)
                         {
-                            current_speed = MOTOR_SPEED_MAX;
+                            new_speed = MOTOR_SPEED_MAX;
                         }
-                        last_valid_speed = current_speed; // Store last valid speed
-                        has_received_speed_command = true; // Mark that we've received a speed command
-                        // Ensure forward direction when setting speed
-                        motor_set_direction(true);
-                        motor_set_speed(current_speed);
-                        motor_direction = true;
-                        lights_set_reverse(false);
+                        // Only execute and print if speed actually changed
+                        if (new_speed != current_speed)
+                        {
+                            current_speed = new_speed;
+                            last_valid_speed = current_speed; // Store last valid speed
+                            has_received_speed_command = true; // Mark that we've received a speed command
+                            // Ensure forward direction when setting speed
+                            motor_set_direction(true);
+                            motor_set_speed(current_speed);
+                            motor_direction = true;
+                            lights_set_reverse(false);
+                            Serial.print("EVENT:CMD_EXECUTED:SET_SPEED:");
+                            Serial.println(current_speed);
+                            Serial.flush();
+                        } else {
+                            // Speed didn't change, but still update last_valid_speed and flags
+                            last_valid_speed = current_speed;
+                            has_received_speed_command = true;
+                            motor_set_direction(true);
+                            motor_set_speed(current_speed);
+                            motor_direction = true;
+                            lights_set_reverse(false);
+                        }
                     }
                     break;
 
                 case CMD_BRAKE_NOW:
                 case CMD_STOP:
+                    Serial.println("EVENT:CMD_EXECUTED:BRAKE_NOW");
+                    Serial.flush();
                     motor_stop();
                     lights_set_reverse(false);
                     current_speed = 0;

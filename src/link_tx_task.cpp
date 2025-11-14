@@ -47,17 +47,23 @@ void link_tx_task(void *pvParameters) {
                     continue; // Skip to next iteration
                     
                 case MSG_TYPE_STATE_EVENT:
-                    snprintf(buffer, sizeof(buffer), "EVENT:STATE=%s\n",
+                    snprintf(buffer, sizeof(buffer), "EVENT:STATE_CHANGED:%s\n",
                              msg.state == STATE_DISARMED ? "DISARMED" :
                              msg.state == STATE_ARMED ? "ARMED" :
                              msg.state == STATE_RUNNING ? "RUNNING" : "FAULT");
-                    Serial1.print(buffer);
+                    Serial.print(buffer);  // Also print to Serial (USB) for dashboard
+                    Serial.flush();        // Ensure it's sent immediately
+                    Serial1.print(buffer); // And to Serial1 (UART)
+                    Serial1.flush();
                     break;
                     
                 case MSG_TYPE_MODE_EVENT:
-                    snprintf(buffer, sizeof(buffer), "EVENT:MODE=%s\n",
+                    snprintf(buffer, sizeof(buffer), "EVENT:MODE_CHANGED:%s\n",
                              msg.mode == MODE_AUTO ? "AUTO" : "MANUAL");
-                    Serial1.print(buffer);
+                    Serial.print(buffer);  // Also print to Serial (USB) for dashboard
+                    Serial.flush();        // Ensure it's sent immediately
+                    Serial1.print(buffer); // And to Serial1 (UART)
+                    Serial1.flush();
                     break;
             }
         }

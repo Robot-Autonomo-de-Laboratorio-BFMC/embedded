@@ -28,21 +28,34 @@ void steer_task(void *pvParameters) {
         if (mailbox_read(steer_mailbox, &topic, &cmd, &value, &ts_ms, &expired)) {
             if (!expired) {
                 switch (cmd) {
-                    case CMD_SET_STEER:
-                        current_angle = (uint16_t)value;
+                    case CMD_SET_STEER: {
+                        uint16_t new_angle = (uint16_t)value;
                         // Clamp angle to valid range
-                        if (current_angle < SERVO_LEFT) {
-                            current_angle = SERVO_LEFT;
-                        } else if (current_angle > SERVO_RIGHT) {
-                            current_angle = SERVO_RIGHT;
+                        if (new_angle < SERVO_LEFT) {
+                            new_angle = SERVO_LEFT;
+                        } else if (new_angle > SERVO_RIGHT) {
+                            new_angle = SERVO_RIGHT;
                         }
-                        steer_set_angle(current_angle);
+                        // Only execute and print if angle actually changed
+                        if (new_angle != current_angle) {
+                            current_angle = new_angle;
+                            steer_set_angle(current_angle);
+                            Serial.print("EVENT:CMD_EXECUTED:SET_STEER:");
+                            Serial.println(current_angle);
+                            Serial.flush();
+                        }
                         break;
+                    }
                         
                     case CMD_STOP:
-                        current_angle = SERVO_CENTER;
-                        steer_set_angle(current_angle);
-                        Serial.println("[SteerTask] Steering centered (stop command)");
+                        // Only execute and print if not already centered
+                        if (current_angle != SERVO_CENTER) {
+                            current_angle = SERVO_CENTER;
+                            steer_set_angle(current_angle);
+                            Serial.println("EVENT:CMD_EXECUTED:SET_STEER_CENTER");
+                            Serial.flush();
+                            Serial.println("[SteerTask] Steering centered (stop command)");
+                        }
                         break;
                         
                     default:

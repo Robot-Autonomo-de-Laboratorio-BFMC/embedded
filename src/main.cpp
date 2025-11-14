@@ -25,11 +25,11 @@ static mailbox_t supervisor_mailbox;
 
 void setup(void)
 {
-    Serial.begin(115200);
-    
+    Serial.begin(921600);  // Match dashboard baudrate
+
     // Wait for serial monitor to connect (ESP32 Serial is always available,
     // but we need time for the monitor to open)
-    delay(5000);
+    delay(10000);
 
     Serial.println("========================================");
     Serial.println("ESP32 RC Car FreeRTOS System Starting...");
@@ -160,6 +160,8 @@ void setup(void)
 
     Serial.println("[main] All tasks created. FreeRTOS scheduler running...");
     Serial.println("[main] System ready!");
+    Serial.println("EVENT:SYSTEM_READY");
+    Serial.flush();
 }
 
 void loop(void)

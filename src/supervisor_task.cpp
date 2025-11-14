@@ -46,6 +46,8 @@ void supervisor_task(void *pvParameters) {
                         if (current_state == STATE_DISARMED) {
                             current_state = STATE_ARMED;
                             last_heartbeat_ms = current_ms;
+                            Serial.println("EVENT:CMD_EXECUTED:SYS_ARM");
+                            Serial.flush();
                             Serial.println("[SupervisorTask] System ARMED");
                             link_tx_send_state_event(current_state);
                         }
@@ -57,6 +59,8 @@ void supervisor_task(void *pvParameters) {
                             current_state = STATE_DISARMED;
                             motor_stop();
                             steer_set_angle(SERVO_CENTER);
+                            Serial.println("EVENT:CMD_EXECUTED:SYS_DISARM");
+                            Serial.flush();
                             Serial.println("[SupervisorTask] System DISARMED");
                             link_tx_send_state_event(current_state);
                         }
@@ -67,6 +71,9 @@ void supervisor_task(void *pvParameters) {
                             system_mode_t new_mode = (value == MODE_AUTO) ? MODE_AUTO : MODE_MANUAL;
                             if (new_mode != current_mode) {
                                 current_mode = new_mode;
+                                Serial.print("EVENT:CMD_EXECUTED:SYS_MODE:");
+                                Serial.println(current_mode == MODE_AUTO ? "AUTO" : "MANUAL");
+                                Serial.flush();
                                 Serial.print("[SupervisorTask] Mode changed to: ");
                                 Serial.println(current_mode == MODE_AUTO ? "AUTO" : "MANUAL");
                                 link_tx_send_mode_event(current_mode);
@@ -83,12 +90,16 @@ void supervisor_task(void *pvParameters) {
         // Check E-STOP GPIO
         bool estop_current = estop_is_triggered();
         if (estop_current && !estop_triggered) {
+            Serial.println("EVENT:ESTOP_TRIGGERED:GPIO");
+            Serial.flush();
             Serial.println("[SupervisorTask] E-STOP triggered via GPIO!");
             estop_triggered = true;
             current_state = STATE_FAULT;
             motor_task_trigger_emergency();
             mailbox_write(steer_mb, TOPIC_STEER, CMD_STOP, 0, 100);
         } else if (!estop_current && estop_triggered) {
+            Serial.println("EVENT:ESTOP_RELEASED");
+            Serial.flush();
             Serial.println("[SupervisorTask] E-STOP released");
             estop_triggered = false;
         }
@@ -98,6 +109,8 @@ void supervisor_task(void *pvParameters) {
             if (last_heartbeat_ms > 0) {
                 uint32_t heartbeat_age = current_ms - last_heartbeat_ms;
                 if (heartbeat_age > WATCHDOG_TIMEOUT_MS) {
+                    Serial.println("EVENT:WATCHDOG_TIMEOUT");
+                    Serial.flush();
                     Serial.print("[SupervisorTask] Watchdog timeout! Heartbeat age: ");
                     Serial.print(heartbeat_age);
                     Serial.println(" ms");
@@ -113,11 +126,19 @@ void supervisor_task(void *pvParameters) {
             if (current_mode == MODE_AUTO) {
                 // In AUTO mode, transition to RUNNING if we have valid heartbeat
                 if (last_heartbeat_ms > 0 && (current_ms - last_heartbeat_ms) < WATCHDOG_TIMEOUT_MS) {
-                    current_state = STATE_RUNNING;
+                    if (current_state != STATE_RUNNING) {
+                        current_state = STATE_RUNNING;
+                        Serial.println("EVENT:STATE_AUTO_TRANSITION:ARMED->RUNNING");
+                        Serial.flush();
+                    }
                 }
             } else {
                 // In MANUAL mode, ARMED automatically transitions to RUNNING
-                current_state = STATE_RUNNING;
+                if (current_state != STATE_RUNNING) {
+                    current_state = STATE_RUNNING;
+                    Serial.println("EVENT:STATE_AUTO_TRANSITION:ARMED->RUNNING");
+                    Serial.flush();
+                }
             }
         }
         

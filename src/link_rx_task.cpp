@@ -111,6 +111,8 @@ void link_rx_task(void *pvParameters) {
                     case CHANNEL_EMERGENCY:
                         if (strcmp(cmd, "BRAKE_NOW") == 0 || strcmp(cmd, "STOP") == 0) {
                             // Emergency: send notification to MotorTask
+                            Serial.println("EVENT:CMD_RECEIVED:BRAKE_NOW");
+                            Serial.flush();
                             motor_task_trigger_emergency();
                             Serial.println("[LinkRxTask] Emergency brake triggered via UART");
                         }
@@ -130,23 +132,39 @@ void link_rx_task(void *pvParameters) {
                             can_control = (state == STATE_ARMED || state == STATE_RUNNING);
                         }
                         
-                        if (can_control) {
-                            if (strcmp(cmd, "SET_SPEED") == 0) {
-                                if (motor_mb != NULL) {
-                                    mailbox_write(motor_mb, TOPIC_MOTOR, CMD_SET_SPEED, value, 200);
-                                }
-                            } else if (strcmp(cmd, "SET_STEER") == 0) {
-                                if (steer_mb != NULL) {
-                                    mailbox_write(steer_mb, TOPIC_STEER, CMD_SET_STEER, value, 200);
-                                }
+                        // Always print received command event, even if ignored
+                        if (strcmp(cmd, "SET_SPEED") == 0) {
+                            Serial.print("EVENT:CMD_RECEIVED:SET_SPEED:");
+                            Serial.println(value);
+                            Serial.flush();
+                            if (can_control && motor_mb != NULL) {
+                                mailbox_write(motor_mb, TOPIC_MOTOR, CMD_SET_SPEED, value, 200);
+                                Serial.print("[LinkRxTask] SET_SPEED command: ");
+                                Serial.println(value);
+                            } else {
+                                Serial.print("[LinkRxTask] SET_SPEED ignored - system state: ");
+                                Serial.print(state == STATE_DISARMED ? "DISARMED" : 
+                                           state == STATE_ARMED ? "ARMED" : 
+                                           state == STATE_RUNNING ? "RUNNING" : "FAULT");
+                                Serial.print(", mode: ");
+                                Serial.println(mode == MODE_AUTO ? "AUTO" : "MANUAL");
                             }
-                        } else {
-                            Serial.print("[LinkRxTask] Control command ignored - system state: ");
-                            Serial.print(state == STATE_DISARMED ? "DISARMED" : 
-                                       state == STATE_ARMED ? "ARMED" : 
-                                       state == STATE_RUNNING ? "RUNNING" : "FAULT");
-                            Serial.print(", mode: ");
-                            Serial.println(mode == MODE_AUTO ? "AUTO" : "MANUAL");
+                        } else if (strcmp(cmd, "SET_STEER") == 0) {
+                            Serial.print("EVENT:CMD_RECEIVED:SET_STEER:");
+                            Serial.println(value);
+                            Serial.flush();
+                            if (can_control && steer_mb != NULL) {
+                                mailbox_write(steer_mb, TOPIC_STEER, CMD_SET_STEER, value, 200);
+                                Serial.print("[LinkRxTask] SET_STEER command: ");
+                                Serial.println(value);
+                            } else {
+                                Serial.print("[LinkRxTask] SET_STEER ignored - system state: ");
+                                Serial.print(state == STATE_DISARMED ? "DISARMED" : 
+                                           state == STATE_ARMED ? "ARMED" : 
+                                           state == STATE_RUNNING ? "RUNNING" : "FAULT");
+                                Serial.print(", mode: ");
+                                Serial.println(mode == MODE_AUTO ? "AUTO" : "MANUAL");
+                            }
                         }
                         break;
                     }
@@ -154,11 +172,15 @@ void link_rx_task(void *pvParameters) {
                     case CHANNEL_MANAGEMENT:
                         if (strcmp(cmd, "SYS_ARM") == 0) {
                             if (supervisor_mb != NULL) {
+                                Serial.println("EVENT:CMD_RECEIVED:SYS_ARM");
+                                Serial.flush();
                                 mailbox_write(supervisor_mb, TOPIC_SYSTEM, CMD_SYS_ARM, 0, 5000);
                                 Serial.println("[LinkRxTask] SYS_ARM command");
                             }
                         } else if (strcmp(cmd, "SYS_DISARM") == 0) {
                             if (supervisor_mb != NULL) {
+                                Serial.println("EVENT:CMD_RECEIVED:SYS_DISARM");
+                                Serial.flush();
                                 mailbox_write(supervisor_mb, TOPIC_SYSTEM, CMD_SYS_DISARM, 0, 5000);
                                 Serial.println("[LinkRxTask] SYS_DISARM command");
                             }
@@ -171,9 +193,33 @@ void link_rx_task(void *pvParameters) {
                                 } else {
                                     mode = MODE_AUTO; // Default to AUTO if not clear
                                 }
+                                Serial.print("EVENT:CMD_RECEIVED:SYS_MODE:");
+                                Serial.println(mode == MODE_AUTO ? "AUTO" : "MANUAL");
+                                Serial.flush();
                                 mailbox_write(supervisor_mb, TOPIC_SYSTEM, CMD_SYS_MODE, mode, 5000);
                                 Serial.print("[LinkRxTask] SYS_MODE: ");
                                 Serial.println(mode == MODE_AUTO ? "AUTO" : "MANUAL");
+                            }
+                        } else if (strcmp(cmd, "LIGHTS_ON") == 0) {
+                            if (lights_mb != NULL) {
+                                Serial.println("EVENT:CMD_RECEIVED:LIGHTS_ON");
+                                Serial.flush();
+                                mailbox_write(lights_mb, TOPIC_LIGHTS, CMD_LIGHTS_ON, 0, 1000);
+                                Serial.println("[LinkRxTask] LIGHTS_ON command");
+                            }
+                        } else if (strcmp(cmd, "LIGHTS_OFF") == 0) {
+                            if (lights_mb != NULL) {
+                                Serial.println("EVENT:CMD_RECEIVED:LIGHTS_OFF");
+                                Serial.flush();
+                                mailbox_write(lights_mb, TOPIC_LIGHTS, CMD_LIGHTS_OFF, 0, 1000);
+                                Serial.println("[LinkRxTask] LIGHTS_OFF command");
+                            }
+                        } else if (strcmp(cmd, "LIGHTS_AUTO") == 0) {
+                            if (lights_mb != NULL) {
+                                Serial.println("EVENT:CMD_RECEIVED:LIGHTS_AUTO");
+                                Serial.flush();
+                                mailbox_write(lights_mb, TOPIC_LIGHTS, CMD_LIGHTS_AUTO, 0, 1000);
+                                Serial.println("[LinkRxTask] LIGHTS_AUTO command");
                             }
                         }
                         break;
