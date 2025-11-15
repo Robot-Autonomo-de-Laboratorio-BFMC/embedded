@@ -58,23 +58,12 @@ Dashboard available at:
 - ✅ Habilita CORS para evitar problemas de acceso
 - ✅ Endpoint de proxy opcional para requests al ESP32 (`/proxy/<endpoint>?ip=<esp32_ip>`)
 - ✅ Health check endpoint (`/health`)
-- ✅ Fácil de migrar (todo en el directorio `test`)
 
 ## Endpoints
 
 - `GET /` - Sirve el dashboard HTML
 - `GET /health` - Health check del servidor
 - `GET /proxy/<endpoint>?ip=<esp32_ip>` - Proxy para requests al ESP32 (opcional)
-
-## Migración
-
-Para migrar el servidor a otra máquina:
-
-1. Copiar el directorio `test` completo
-2. Instalar dependencias: `pip install -r requirements.txt`
-3. Ejecutar: `python dashboard_server.py`
-
-Todo está contenido en el directorio `test`, por lo que es fácil de mover.
 
 ## Notas
 
