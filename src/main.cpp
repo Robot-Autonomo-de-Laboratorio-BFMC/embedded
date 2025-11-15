@@ -25,7 +25,7 @@ static mailbox_t supervisor_mailbox;
 
 void setup(void)
 {
-    Serial.begin(921600);  // Match dashboard baudrate
+    Serial.begin(115200); // Match dashboard baudrate
 
     // Wait for serial monitor to connect (ESP32 Serial is always available,
     // but we need time for the monitor to open)

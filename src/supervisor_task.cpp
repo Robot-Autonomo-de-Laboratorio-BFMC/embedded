@@ -29,6 +29,24 @@ void supervisor_task(void *pvParameters) {
     
     Serial.println("[SupervisorTask] Supervisor task started");
     
+    // Give other tasks time to initialize (especially link_tx_task)
+    vTaskDelay(pdMS_TO_TICKS(100));
+    
+    // Print initial state and mode at boot
+    Serial.print("EVENT:STATE_CHANGED:");
+    Serial.println(current_state == STATE_DISARMED ? "DISARMED" :
+                   current_state == STATE_ARMED ? "ARMED" :
+                   current_state == STATE_RUNNING ? "RUNNING" : "FAULT");
+    Serial.flush();
+    
+    Serial.print("EVENT:MODE_CHANGED:");
+    Serial.println(current_mode == MODE_AUTO ? "AUTO" : "MANUAL");
+    Serial.flush();
+    
+    // Also send via link_tx for UART transmission
+    link_tx_send_state_event(current_state);
+    link_tx_send_mode_event(current_mode);
+    
     while (1) {
         uint32_t current_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
         
