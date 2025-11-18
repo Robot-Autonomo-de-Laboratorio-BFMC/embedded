@@ -368,6 +368,57 @@ def list_ports():
         return jsonify({'error': str(e), 'ports': []}), 500
 
 
+def initialize_autopilot_if_needed():
+    """Initialize autopilot controller if conditions are met."""
+    global autopilot_controller, command_sender, video_streamer, serial_conn
+    
+    # Only initialize if not already initialized
+    if autopilot_controller is not None:
+        return True
+    
+    # Check if we have all required components
+    if CommandSender is None or AutoPilotController is None:
+        print("[UART] Autopilot modules not available", file=sys.stderr)
+        return False
+    
+    if not serial_conn or not serial_conn.is_open:
+        print("[UART] Serial port not connected", file=sys.stderr)
+        return False
+    
+    # Initialize command sender
+    if command_sender is None:
+        command_sender = CommandSender(write_uart_command)
+        print("[UART] Command sender initialized", file=sys.stderr)
+    
+    # Initialize video streamer if not already done
+    if video_streamer is None and VideoStreamer is not None:
+        print("[UART] Initializing video streamer...", file=sys.stderr)
+        video_streamer = VideoStreamer()
+        if not video_streamer.initialize():
+            print("[UART] Video streamer initialization failed", file=sys.stderr)
+            video_streamer = None
+            return False
+        print("[UART] Video streamer initialized", file=sys.stderr)
+    
+    # Initialize autopilot controller
+    if video_streamer is not None:
+        print("[UART] Initializing autopilot controller...", file=sys.stderr)
+        # Use default PID parameters (can be made configurable later)
+        autopilot_controller = AutoPilotController(
+            video_streamer=video_streamer,
+            command_sender=command_sender,
+            pid_kp=0.045,
+            pid_ki=0.002,
+            pid_kd=0.02,
+            pid_tolerance=40,
+            threshold=180
+        )
+        print("[UART] Autopilot controller initialized (not started - use /autopilot/start)", file=sys.stderr)
+        return True
+    else:
+        print("[UART] Autopilot controller not initialized - video streamer not available", file=sys.stderr)
+        return False
+
 @app.route('/uart/connect', methods=['POST'])
 def uart_connect():
     """Connect to ESP32 via UART."""
@@ -392,13 +443,22 @@ def uart_connect():
         serial_read_buffer = ""  # Clear buffer on new connection
         time.sleep(0.1)
         start_serial_reader()
-
-        return jsonify({
+        
+        # Try to initialize autopilot if modules are available
+        autopilot_initialized = initialize_autopilot_if_needed()
+        
+        response = {
             'status': 'ok',
             'message': f'Connected to {port}',
             'port': port,
-            'baudrate': UART_BAUD_RATE
-        })
+            'baudrate': UART_BAUD_RATE,
+            'autopilot_available': autopilot_initialized
+        }
+        
+        if not autopilot_initialized:
+            response['warning'] = 'Autopilot not initialized - check camera connection and module availability'
+
+        return jsonify(response)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -406,9 +466,13 @@ def uart_connect():
 @app.route('/uart/disconnect', methods=['POST'])
 def uart_disconnect():
     """Disconnect from ESP32."""
-    global serial_conn, serial_read_buffer
+    global serial_conn, serial_read_buffer, autopilot_controller
 
     stop_serial_reader()
+    
+    # Stop autopilot if running
+    if autopilot_controller:
+        autopilot_controller.stop()
 
     if serial_conn and serial_conn.is_open:
         serial_conn.close()
@@ -631,8 +695,37 @@ def debug_status():
 def autopilot_start():
     """Start the auto-pilot controller."""
     global autopilot_controller
+    
+    # Try to initialize if not already initialized
     if autopilot_controller is None:
-        return jsonify({'error': 'Auto-pilot controller not initialized'}), 503
+        initialized = initialize_autopilot_if_needed()
+        if not initialized:
+            # Get detailed status for error message
+            status = {
+                'error': 'Auto-pilot controller not initialized',
+                'details': {
+                    'modules_available': {
+                        'CommandSender': CommandSender is not None,
+                        'AutoPilotController': AutoPilotController is not None,
+                        'VideoStreamer': VideoStreamer is not None
+                    },
+                    'serial_connected': serial_conn is not None and serial_conn.is_open if serial_conn else False,
+                    'video_streamer_initialized': video_streamer is not None
+                },
+                'suggestions': []
+            }
+            
+            if not status['details']['serial_connected']:
+                status['suggestions'].append('Connect UART port first')
+            if not status['details']['video_streamer_initialized']:
+                if not status['details']['modules_available']['VideoStreamer']:
+                    status['suggestions'].append('Install autopilot modules: pip install opencv-python numpy')
+                else:
+                    status['suggestions'].append('Connect camera USB device')
+            if not status['details']['modules_available']['AutoPilotController']:
+                status['suggestions'].append('Autopilot modules not found - check that you are in brain/dashboard directory')
+            
+            return jsonify(status), 503
     
     success = autopilot_controller.start()
     if success:
@@ -654,6 +747,41 @@ def autopilot_stop():
     else:
         return jsonify({'error': 'Auto-pilot not running'}), 400
 
+
+@app.route('/autopilot/init-status', methods=['GET'])
+def autopilot_init_status():
+    """Get initialization status of autopilot components."""
+    global autopilot_controller, command_sender, video_streamer, serial_conn
+    
+    status = {
+        'autopilot_controller_initialized': autopilot_controller is not None,
+        'command_sender_initialized': command_sender is not None,
+        'video_streamer_initialized': video_streamer is not None,
+        'serial_connected': serial_conn is not None and serial_conn.is_open if serial_conn else False,
+        'modules_available': {
+            'CommandSender': CommandSender is not None,
+            'AutoPilotController': AutoPilotController is not None,
+            'VideoStreamer': VideoStreamer is not None
+        }
+    }
+    
+    # Add reasons if not initialized
+    if not status['autopilot_controller_initialized']:
+        reasons = []
+        if not status['modules_available']['AutoPilotController']:
+            reasons.append('AutopilotController module not imported')
+        if not status['modules_available']['CommandSender']:
+            reasons.append('CommandSender module not imported')
+        if not status['serial_connected']:
+            reasons.append('Serial port not connected')
+        if not status['video_streamer_initialized']:
+            if not status['modules_available']['VideoStreamer']:
+                reasons.append('VideoStreamer module not imported')
+            else:
+                reasons.append('Video streamer initialization failed (check camera)')
+        status['initialization_issues'] = reasons
+    
+    return jsonify(status)
 
 @app.route('/autopilot/status', methods=['GET'])
 def autopilot_status():
