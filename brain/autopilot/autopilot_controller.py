@@ -164,9 +164,8 @@ class AutoPilotController:
                 self.pid_kd = kd
                 self.detector.pid_controller.Kd = kd
             
-            # Reset PID state when parameters change
-            self.detector.pid_controller.integral = 0
-            self.detector.pid_controller.prev_error = 0
+            # Reset PID state when parameters change (using the new reset method)
+            self.detector.pid_controller.reset()
     
     def get_pid_parameters(self) -> dict:
         """Get current PID parameters."""
