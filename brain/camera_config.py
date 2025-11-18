@@ -21,7 +21,7 @@ def detect_os():
 def choose_camera_by_OS():
     os = detect_os()
     if os == "wsl" or os == "linux":
-        return LINUX_CAMERA_PATH
+        return LINUX_CAMERA_PATH_RGBD
     else:
         return WINDOWS_CAMERA_PATH
 
