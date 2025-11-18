@@ -412,7 +412,7 @@ def initialize_autopilot_if_needed():
             pid_kp=0.06,
             pid_ki=0.002,
             pid_kd=0.02,
-            pid_tolerance=40
+            pid_tolerance=3.0
         )
         print("[UART] Autopilot controller initialized (not started - use /autopilot/start)", file=sys.stderr)
         return True
@@ -928,8 +928,8 @@ if __name__ == '__main__':
                         help='PID integral gain (default: 0.002)')
     parser.add_argument('--pid-kd', type=float, default=0.02,
                         help='PID derivative gain (default: 0.02)')
-    parser.add_argument('--pid-tolerance', type=int, default=40,
-                        help='PID tolerance for straight detection (default: 40)')
+    parser.add_argument('--pid-tolerance', type=float, default=3.0,
+                        help='PID tolerance for straight detection in degrees (default: 3.0)')
 
     args = parser.parse_args()
 

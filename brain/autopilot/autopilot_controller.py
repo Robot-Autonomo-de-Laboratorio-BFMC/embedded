@@ -23,7 +23,7 @@ class AutoPilotController:
     
     def __init__(self, video_streamer: VideoStreamer, command_sender: CommandSender,
                  threshold: int = 180, pid_kp: float = 0.06, pid_ki: float = 0.002, 
-                 pid_kd: float = 0.02, pid_tolerance: int = 40):
+                 pid_kd: float = 0.02, pid_tolerance: float = 3.0):
         """
         Initialize the auto-pilot controller.
         

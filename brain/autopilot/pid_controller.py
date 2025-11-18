@@ -59,7 +59,7 @@ class PIDController:
         Compute PID control output.
         
         Args:
-            error: Current error (pixels)
+            error: Current error (degrees - angular error)
             dt: Time delta since last call (seconds)
             integral_reset_interval: Optional override for reset interval
             
@@ -73,7 +73,8 @@ class PIDController:
         if dt <= 0:
             dt = self.min_dt
         
-        # Dead zone: if error is very small, go straight
+        # Dead zone: if error is very small (in degrees), go straight
+        # tolerance is now in degrees, not pixels
         if abs(error) < self.tolerance:
             # Reset integral when in dead zone to prevent accumulation
             self.integral = 0.0

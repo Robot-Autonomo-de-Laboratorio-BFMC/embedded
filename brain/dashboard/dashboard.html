@@ -472,9 +472,9 @@
                         <div style="margin-bottom: 10px;">
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
                                 <span style="color: #fff;">Tolerance:</span>
-                                <span id="pid-tolerance-value" style="color: #4CAF50; font-weight: bold; min-width: 60px; text-align: right;">40</span>
+                                <span id="pid-tolerance-value" style="color: #4CAF50; font-weight: bold; min-width: 60px; text-align: right;">3.0</span>
                             </div>
-                            <input type="range" id="pid-tolerance-slider" min="0" max="100" step="1" value="40" 
+                            <input type="range" id="pid-tolerance-slider" min="0" max="10" step="0.1" value="3.0" 
                                    style="width: 100%; height: 6px; background: #333; border-radius: 3px; outline: none;"
                                    oninput="updatePIDParameter('tolerance', this.value)">
                         </div>
@@ -1228,7 +1228,7 @@
             const valueEl = document.getElementById(`pid-${param}-value`);
             if (valueEl) {
                 if (param === 'tolerance') {
-                    valueEl.textContent = Math.round(parseFloat(value));
+                    valueEl.textContent = parseFloat(value).toFixed(1);
                 } else {
                     valueEl.textContent = parseFloat(value).toFixed(4);
                 }
@@ -1321,7 +1321,7 @@
                 const toleranceValue = document.getElementById('pid-tolerance-value');
                 if (toleranceSlider && toleranceValue) {
                     toleranceSlider.value = params.tolerance;
-                    toleranceValue.textContent = Math.round(params.tolerance);
+                    toleranceValue.textContent = parseFloat(params.tolerance).toFixed(1);
                 }
             }
         }
