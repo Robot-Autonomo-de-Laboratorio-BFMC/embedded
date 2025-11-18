@@ -425,10 +425,61 @@
                             <span style="color: #fff;">Servo Angle:</span>
                             <span id="autopilot-servo-angle" style="color: #fff;">--</span>
                         </div>
-                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
                             <span style="color: #fff;">Commands Sent:</span>
                             <span id="autopilot-command-count" style="color: #fff;">0</span>
                         </div>
+                    </div>
+                    
+                    <!-- PID Parameters Section -->
+                    <div style="background: #1a1a1a; border-radius: 8px; padding: 15px; margin-bottom: 15px;">
+                        <h3 style="color: #fff; margin-top: 0; margin-bottom: 15px; font-size: 16px;">PID Parameters</h3>
+                        
+                        <!-- Kp Slider -->
+                        <div style="margin-bottom: 15px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                                <span style="color: #fff;">Kp (Proportional):</span>
+                                <span id="pid-kp-value" style="color: #4CAF50; font-weight: bold; min-width: 60px; text-align: right;">0.06</span>
+                            </div>
+                            <input type="range" id="pid-kp-slider" min="0" max="0.5" step="0.001" value="0.06" 
+                                   style="width: 100%; height: 6px; background: #333; border-radius: 3px; outline: none;"
+                                   oninput="updatePIDParameter('kp', this.value)">
+                        </div>
+                        
+                        <!-- Ki Slider -->
+                        <div style="margin-bottom: 15px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                                <span style="color: #fff;">Ki (Integral):</span>
+                                <span id="pid-ki-value" style="color: #4CAF50; font-weight: bold; min-width: 60px; text-align: right;">0.002</span>
+                            </div>
+                            <input type="range" id="pid-ki-slider" min="0" max="0.01" step="0.0001" value="0.002" 
+                                   style="width: 100%; height: 6px; background: #333; border-radius: 3px; outline: none;"
+                                   oninput="updatePIDParameter('ki', this.value)">
+                        </div>
+                        
+                        <!-- Kd Slider -->
+                        <div style="margin-bottom: 15px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                                <span style="color: #fff;">Kd (Derivative):</span>
+                                <span id="pid-kd-value" style="color: #4CAF50; font-weight: bold; min-width: 60px; text-align: right;">0.02</span>
+                            </div>
+                            <input type="range" id="pid-kd-slider" min="0" max="0.2" step="0.001" value="0.02" 
+                                   style="width: 100%; height: 6px; background: #333; border-radius: 3px; outline: none;"
+                                   oninput="updatePIDParameter('kd', this.value)">
+                        </div>
+                        
+                        <!-- Tolerance Slider -->
+                        <div style="margin-bottom: 10px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                                <span style="color: #fff;">Tolerance:</span>
+                                <span id="pid-tolerance-value" style="color: #4CAF50; font-weight: bold; min-width: 60px; text-align: right;">40</span>
+                            </div>
+                            <input type="range" id="pid-tolerance-slider" min="0" max="100" step="1" value="40" 
+                                   style="width: 100%; height: 6px; background: #333; border-radius: 3px; outline: none;"
+                                   oninput="updatePIDParameter('tolerance', this.value)">
+                        </div>
+                        
+                        <button class="btn btn-info" onclick="loadPIDParameters()" style="width: 100%; margin-top: 10px;">Refresh PID Values</button>
                     </div>
                     <div class="button-grid">
                         <button class="btn btn-success" onclick="startAutopilot()">Start Auto-Pilot</button>
@@ -1110,6 +1161,11 @@
                         commandCountEl.textContent = '0';
                     }
                     
+                    // Update PID parameters if available
+                    if (data.pid_parameters) {
+                        updatePIDSliders(data.pid_parameters, false); // false = don't trigger update
+                    }
+                    
                 } else {
                     // Auto-pilot not available or error
                     const statusEl = document.getElementById('autopilot-status');
@@ -1164,9 +1220,118 @@
         restoreSliderValues();
         restoreSystemStatus();
         
+        // PID parameter update functions
+        let pidUpdateTimeout = null;
+        
+        async function updatePIDParameter(param, value) {
+            // Update display immediately
+            const valueEl = document.getElementById(`pid-${param}-value`);
+            if (valueEl) {
+                if (param === 'tolerance') {
+                    valueEl.textContent = Math.round(parseFloat(value));
+                } else {
+                    valueEl.textContent = parseFloat(value).toFixed(4);
+                }
+            }
+            
+            // Debounce API calls - wait 300ms after last change
+            clearTimeout(pidUpdateTimeout);
+            pidUpdateTimeout = setTimeout(async () => {
+                try {
+                    const updateData = {};
+                    updateData[param] = parseFloat(value);
+                    
+                    const response = await fetch(`${getBaseURL()}/autopilot/pid`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(updateData)
+                    });
+                    
+                    if (response.ok) {
+                        const data = await response.json();
+                        log(`PID ${param} updated to ${value}`, 'success');
+                        // Update sliders with server response to ensure sync
+                        if (data.pid_parameters) {
+                            updatePIDSliders(data.pid_parameters, false); // false = don't trigger update
+                        }
+                    } else {
+                        const errorData = await response.json().catch(() => ({}));
+                        log(`Failed to update PID ${param}: ${errorData.error || response.status}`, 'error');
+                    }
+                } catch (error) {
+                    log(`Error updating PID ${param}: ${error.message}`, 'error');
+                }
+            }, 300);
+        }
+        
+        async function loadPIDParameters() {
+            try {
+                const response = await fetch(`${getBaseURL()}/autopilot/pid`, {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    updatePIDSliders(data);
+                    log('PID parameters loaded', 'success');
+                } else {
+                    const errorData = await response.json().catch(() => ({}));
+                    log(`Failed to load PID parameters: ${errorData.error || response.status}`, 'error');
+                }
+            } catch (error) {
+                log(`Error loading PID parameters: ${error.message}`, 'error');
+            }
+        }
+        
+        function updatePIDSliders(params, triggerUpdate = true) {
+            // Update Kp
+            if (params.kp !== undefined) {
+                const kpSlider = document.getElementById('pid-kp-slider');
+                const kpValue = document.getElementById('pid-kp-value');
+                if (kpSlider && kpValue) {
+                    kpSlider.value = params.kp;
+                    kpValue.textContent = parseFloat(params.kp).toFixed(4);
+                }
+            }
+            
+            // Update Ki
+            if (params.ki !== undefined) {
+                const kiSlider = document.getElementById('pid-ki-slider');
+                const kiValue = document.getElementById('pid-ki-value');
+                if (kiSlider && kiValue) {
+                    kiSlider.value = params.ki;
+                    kiValue.textContent = parseFloat(params.ki).toFixed(4);
+                }
+            }
+            
+            // Update Kd
+            if (params.kd !== undefined) {
+                const kdSlider = document.getElementById('pid-kd-slider');
+                const kdValue = document.getElementById('pid-kd-value');
+                if (kdSlider && kdValue) {
+                    kdSlider.value = params.kd;
+                    kdValue.textContent = parseFloat(params.kd).toFixed(4);
+                }
+            }
+            
+            // Update Tolerance
+            if (params.tolerance !== undefined) {
+                const toleranceSlider = document.getElementById('pid-tolerance-slider');
+                const toleranceValue = document.getElementById('pid-tolerance-value');
+                if (toleranceSlider && toleranceValue) {
+                    toleranceSlider.value = params.tolerance;
+                    toleranceValue.textContent = Math.round(params.tolerance);
+                }
+            }
+        }
+        
         // Initialize auto-pilot status polling
         updateAutopilotStatus();
         setInterval(updateAutopilotStatus, 1000); // Update every second
+        
+        // Load PID parameters on page load
+        loadPIDParameters();
         
         // Initialize - refresh ports on load (connection status will be checked after ports load)
         log('Dashboard initialized. Select UART port and click Connect.', 'info');

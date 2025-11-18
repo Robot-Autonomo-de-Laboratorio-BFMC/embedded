@@ -130,7 +130,7 @@ class PIDController:
             'min_output': self.min_output
         }
     
-    def set_parameters(self, Kp: float = None, Ki: float = None, Kd: float = None):
+    def set_parameters(self, Kp: float = None, Ki: float = None, Kd: float = None, tolerance: float = None):
         """
         Update PID parameters dynamically.
         
@@ -138,6 +138,7 @@ class PIDController:
             Kp: New proportional gain (None to keep current)
             Ki: New integral gain (None to keep current)
             Kd: New derivative gain (None to keep current)
+            tolerance: New tolerance value (None to keep current)
         """
         if Kp is not None:
             self.Kp = Kp
@@ -145,6 +146,8 @@ class PIDController:
             self.Ki = Ki
         if Kd is not None:
             self.Kd = Kd
+        if tolerance is not None:
+            self.tolerance = tolerance
         # Reset state when parameters change
         self.reset()
 

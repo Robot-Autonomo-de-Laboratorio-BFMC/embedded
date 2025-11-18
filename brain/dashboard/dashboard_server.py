@@ -807,6 +807,7 @@ def autopilot_update_pid():
     kp = data.get('kp')
     ki = data.get('ki')
     kd = data.get('kd')
+    tolerance = data.get('tolerance')
     
     # Validate parameters
     if kp is not None and (not isinstance(kp, (int, float)) or kp < 0):
@@ -815,9 +816,11 @@ def autopilot_update_pid():
         return jsonify({'error': 'Invalid ki value'}), 400
     if kd is not None and (not isinstance(kd, (int, float)) or kd < 0):
         return jsonify({'error': 'Invalid kd value'}), 400
+    if tolerance is not None and (not isinstance(tolerance, (int, float)) or tolerance < 0):
+        return jsonify({'error': 'Invalid tolerance value'}), 400
     
     # Update parameters
-    autopilot_controller.update_pid_parameters(kp=kp, ki=ki, kd=kd)
+    autopilot_controller.update_pid_parameters(kp=kp, ki=ki, kd=kd, tolerance=tolerance)
     
     # Return updated parameters
     updated_params = autopilot_controller.get_pid_parameters()

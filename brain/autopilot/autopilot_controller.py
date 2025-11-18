@@ -144,7 +144,7 @@ class AutoPilotController:
                 'error_count': self.error_count
             }
     
-    def update_pid_parameters(self, kp: float = None, ki: float = None, kd: float = None):
+    def update_pid_parameters(self, kp: float = None, ki: float = None, kd: float = None, tolerance: int = None):
         """
         Update PID parameters dynamically.
         
@@ -152,6 +152,7 @@ class AutoPilotController:
             kp: New proportional gain (None to keep current)
             ki: New integral gain (None to keep current)
             kd: New derivative gain (None to keep current)
+            tolerance: New tolerance value (None to keep current)
         """
         with self.lock:
             if kp is not None:
@@ -160,9 +161,11 @@ class AutoPilotController:
                 self.pid_ki = ki
             if kd is not None:
                 self.pid_kd = kd
+            if tolerance is not None:
+                self.pid_tolerance = tolerance
             
             # Update PID controller parameters
-            self.detector.pid_controller.set_parameters(Kp=kp, Ki=ki, Kd=kd)
+            self.detector.pid_controller.set_parameters(Kp=kp, Ki=ki, Kd=kd, tolerance=tolerance)
     
     def get_pid_parameters(self) -> dict:
         """Get current PID parameters."""
