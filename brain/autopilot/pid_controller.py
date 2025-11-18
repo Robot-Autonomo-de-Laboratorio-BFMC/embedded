@@ -7,15 +7,9 @@ Following SRP: This module only handles PID control logic.
 
 class PIDController:
     """
-    Improved PID Controller with better stability and noise filtering.
-    Features:
-    - Anti-windup protection for integral term
-    - Derivative filtering to reduce noise sensitivity
-    - Dead zone handling
-    - Output clamping
+    PID Controller responsible only for PID calculation, max angle limits, and deadband.
     """
-    def __init__(self, Kp: float, Ki: float, Kd: float, tolerance: float, 
-                 max_output: float = 30.0, min_output: float = -30.0):
+    def __init__(self, Kp: float, Ki: float, Kd: float, max_angle: float = 30.0, deadband: float = 6.0):
         """
         Initialize the PID controller.
         
@@ -23,18 +17,18 @@ class PIDController:
             Kp: Proportional gain
             Ki: Integral gain
             Kd: Derivative gain
-            tolerance: Dead zone tolerance (if error < tolerance, output is 0)
-            max_output: Maximum output value (default: 30.0)
-            min_output: Minimum output value (default: -30.0)
+            max_angle: Maximum output angle in degrees (default: 30.0)
+            deadband: Deadband angle in degrees - if output < deadband, return 0 (default: 6.0)
         """
         self.Kp = Kp
         self.Ki = Ki
         self.Kd = Kd
-        self.tolerance = tolerance
+        self.max_angle = max_angle
+        self.deadband = deadband
         
-        # Output limits
-        self.max_output = max_output
-        self.min_output = min_output
+        # Output limits (symmetric around 0)
+        self.max_output = max_angle
+        self.min_output = -max_angle
         
         # State variables
         self.prev_error = 0.0
@@ -64,7 +58,7 @@ class PIDController:
             integral_reset_interval: Optional override for reset interval
             
         Returns:
-            Control signal (angle in degrees, or 0.0 for straight when in dead zone)
+            Control signal (angle in degrees, clamped to max_angle, or 0.0 if within deadband)
         """
         if integral_reset_interval is not None:
             self.integral_reset_interval = integral_reset_interval
@@ -72,14 +66,6 @@ class PIDController:
         # Ensure dt is valid
         if dt <= 0:
             dt = self.min_dt
-        
-        # Dead zone: if error is very small (in degrees), go straight
-        # tolerance is now in degrees, not pixels
-        if abs(error) < self.tolerance:
-            # Reset integral when in dead zone to prevent accumulation
-            self.integral = 0.0
-            self.prev_error = error
-            return 0.0  # Go straight
         
         # Proportional term
         proportional = error
@@ -105,8 +91,14 @@ class PIDController:
         # Compute PID output
         control_signal = self.Kp * proportional + self.Ki * self.integral + self.Kd * derivative
         
-        # Clamp output to valid range
+        # Clamp output to valid range (max_angle)
         control_signal = max(min(control_signal, self.max_output), self.min_output)
+        
+        # Apply deadband: if output is within deadband, return 0
+        if abs(control_signal) < self.deadband:
+            control_signal = 0.0
+            # Reset integral when in deadband to prevent accumulation
+            self.integral = 0.0
         
         # Update previous error
         self.prev_error = error
@@ -126,12 +118,12 @@ class PIDController:
             'Kp': self.Kp,
             'Ki': self.Ki,
             'Kd': self.Kd,
-            'tolerance': self.tolerance,
-            'max_output': self.max_output,
-            'min_output': self.min_output
+            'max_angle': self.max_angle,
+            'deadband': self.deadband
         }
     
-    def set_parameters(self, Kp: float = None, Ki: float = None, Kd: float = None, tolerance: float = None):
+    def set_parameters(self, Kp: float = None, Ki: float = None, Kd: float = None, 
+                     max_angle: float = None, deadband: float = None):
         """
         Update PID parameters dynamically.
         
@@ -139,7 +131,8 @@ class PIDController:
             Kp: New proportional gain (None to keep current)
             Ki: New integral gain (None to keep current)
             Kd: New derivative gain (None to keep current)
-            tolerance: New tolerance value (None to keep current)
+            max_angle: New max angle (None to keep current)
+            deadband: New deadband (None to keep current)
         """
         if Kp is not None:
             self.Kp = Kp
@@ -147,8 +140,11 @@ class PIDController:
             self.Ki = Ki
         if Kd is not None:
             self.Kd = Kd
-        if tolerance is not None:
-            self.tolerance = tolerance
+        if max_angle is not None:
+            self.max_angle = max_angle
+            self.max_output = max_angle
+            self.min_output = -max_angle
+        if deadband is not None:
+            self.deadband = deadband
         # Reset state when parameters change
         self.reset()
-

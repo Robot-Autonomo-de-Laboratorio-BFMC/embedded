@@ -9,8 +9,8 @@ import time
 import sys
 import os
 
-# Import lane_detector module from same package
-from .lane_detector import MarcosLaneDetector_Advanced
+# Import VehicleControlBrain (main orchestrator)
+from .vehicle_control_brain import VehicleControlBrain
 
 # Import autopilot modules (relative imports within package)
 from .angle_converter import AngleConverter
@@ -23,7 +23,7 @@ class AutoPilotController:
     
     def __init__(self, video_streamer: VideoStreamer, command_sender: CommandSender,
                  threshold: int = 180, pid_kp: float = 0.06, pid_ki: float = 0.002, 
-                 pid_kd: float = 0.02, pid_tolerance: float = 3.0):
+                 pid_kd: float = 0.02, max_angle: float = 30.0, deadband: float = 6.0):
         """
         Initialize the auto-pilot controller.
         
@@ -34,26 +34,29 @@ class AutoPilotController:
             pid_kp: PID proportional gain
             pid_ki: PID integral gain
             pid_kd: PID derivative gain
-            pid_tolerance: PID tolerance for "straight" detection
+            max_angle: Maximum steering angle in degrees (default: 30.0)
+            deadband: Deadband angle in degrees (default: 6.0)
         """
         self.video_streamer = video_streamer
         self.command_sender = command_sender
         self.angle_converter = AngleConverter()
         
-        # Initialize lane detector with PID parameters
-        self.detector = MarcosLaneDetector_Advanced(
-            threshold=threshold,
-            pid_kp=pid_kp,
-            pid_ki=pid_ki,
-            pid_kd=pid_kd,
-            pid_tolerance=pid_tolerance
+        # Initialize VehicleControlBrain (orchestrates detector + PID)
+        self.control_brain = VehicleControlBrain(
+            lane_threshold=threshold,
+            Kp=pid_kp,
+            Ki=pid_ki,
+            Kd=pid_kd,
+            max_angle=max_angle,
+            deadband=deadband
         )
         
         # Store PID parameters for later updates
         self.pid_kp = pid_kp
         self.pid_ki = pid_ki
         self.pid_kd = pid_kd
-        self.pid_tolerance = pid_tolerance
+        self.max_angle = max_angle
+        self.deadband = deadband
         
         self.is_running = False
         self.thread = None
@@ -101,8 +104,8 @@ class AutoPilotController:
                     time.sleep(0.033)  # Wait ~30ms if no frame
                     continue
                 
-                # Detect lane and get steering angle from curvature
-                steering_angle, debug_images = self.detector.get_steering_angle(frame)
+                # Process frame through VehicleControlBrain (detector + PID)
+                steering_angle, debug_images = self.control_brain.process_frame(frame)
                 
                 # Store debug images for streaming
                 with self.lock:
@@ -144,7 +147,8 @@ class AutoPilotController:
                 'error_count': self.error_count
             }
     
-    def update_pid_parameters(self, kp: float = None, ki: float = None, kd: float = None, tolerance: int = None):
+    def update_pid_parameters(self, kp: float = None, ki: float = None, kd: float = None, 
+                             max_angle: float = None, deadband: float = None):
         """
         Update PID parameters dynamically.
         
@@ -152,7 +156,8 @@ class AutoPilotController:
             kp: New proportional gain (None to keep current)
             ki: New integral gain (None to keep current)
             kd: New derivative gain (None to keep current)
-            tolerance: New tolerance value (None to keep current)
+            max_angle: New max angle (None to keep current)
+            deadband: New deadband (None to keep current)
         """
         with self.lock:
             if kp is not None:
@@ -161,21 +166,26 @@ class AutoPilotController:
                 self.pid_ki = ki
             if kd is not None:
                 self.pid_kd = kd
-            if tolerance is not None:
-                self.pid_tolerance = tolerance
+            if max_angle is not None:
+                self.max_angle = max_angle
+            if deadband is not None:
+                self.deadband = deadband
             
-            # Update PID controller parameters
-            self.detector.pid_controller.set_parameters(Kp=kp, Ki=ki, Kd=kd, tolerance=tolerance)
+            # Update PID controller parameters through VehicleControlBrain
+            self.control_brain.update_pid_parameters(
+                Kp=kp, Ki=ki, Kd=kd, max_angle=max_angle, deadband=deadband
+            )
     
     def get_pid_parameters(self) -> dict:
         """Get current PID parameters."""
         with self.lock:
-            pid_params = self.detector.pid_controller.get_parameters()
+            pid_params = self.control_brain.get_pid_parameters()
             return {
                 'kp': pid_params['Kp'],
                 'ki': pid_params['Ki'],
                 'kd': pid_params['Kd'],
-                'tolerance': pid_params['tolerance']
+                'max_angle': pid_params['max_angle'],
+                'deadband': pid_params['deadband']
             }
     
     def get_debug_image(self, image_key: str):

@@ -412,7 +412,8 @@ def initialize_autopilot_if_needed():
             pid_kp=0.06,
             pid_ki=0.002,
             pid_kd=0.02,
-            pid_tolerance=3.0
+            max_angle=30.0,
+            deadband=6.0
         )
         print("[UART] Autopilot controller initialized (not started - use /autopilot/start)", file=sys.stderr)
         return True
@@ -807,7 +808,8 @@ def autopilot_update_pid():
     kp = data.get('kp')
     ki = data.get('ki')
     kd = data.get('kd')
-    tolerance = data.get('tolerance')
+    max_angle = data.get('max_angle')
+    deadband = data.get('deadband')
     
     # Validate parameters
     if kp is not None and (not isinstance(kp, (int, float)) or kp < 0):
@@ -816,11 +818,13 @@ def autopilot_update_pid():
         return jsonify({'error': 'Invalid ki value'}), 400
     if kd is not None and (not isinstance(kd, (int, float)) or kd < 0):
         return jsonify({'error': 'Invalid kd value'}), 400
-    if tolerance is not None and (not isinstance(tolerance, (int, float)) or tolerance < 0):
-        return jsonify({'error': 'Invalid tolerance value'}), 400
+    if max_angle is not None and (not isinstance(max_angle, (int, float)) or max_angle < 0):
+        return jsonify({'error': 'Invalid max_angle value'}), 400
+    if deadband is not None and (not isinstance(deadband, (int, float)) or deadband < 0):
+        return jsonify({'error': 'Invalid deadband value'}), 400
     
     # Update parameters
-    autopilot_controller.update_pid_parameters(kp=kp, ki=ki, kd=kd, tolerance=tolerance)
+    autopilot_controller.update_pid_parameters(kp=kp, ki=ki, kd=kd, max_angle=max_angle, deadband=deadband)
     
     # Return updated parameters
     updated_params = autopilot_controller.get_pid_parameters()
@@ -928,8 +932,10 @@ if __name__ == '__main__':
                         help='PID integral gain (default: 0.002)')
     parser.add_argument('--pid-kd', type=float, default=0.02,
                         help='PID derivative gain (default: 0.02)')
-    parser.add_argument('--pid-tolerance', type=float, default=3.0,
-                        help='PID tolerance for straight detection in degrees (default: 3.0)')
+    parser.add_argument('--max-angle', type=float, default=30.0,
+                        help='Maximum steering angle in degrees (default: 30.0)')
+    parser.add_argument('--deadband', type=float, default=6.0,
+                        help='Deadband angle in degrees (default: 6.0)')
 
     args = parser.parse_args()
 
@@ -1004,7 +1010,8 @@ if __name__ == '__main__':
                 pid_kp=args.pid_kp,
                 pid_ki=args.pid_ki,
                 pid_kd=args.pid_kd,
-                pid_tolerance=args.pid_tolerance
+                max_angle=args.max_angle,
+                deadband=args.deadband
             )
             
             if video_streamer is not None:
