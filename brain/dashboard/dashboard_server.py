@@ -89,8 +89,8 @@ def write_uart_command(command: str):
 def translate_http_to_uart(endpoint: str, args: dict):
     """Translate HTTP endpoint to UART command."""
     SERVO_CENTER = 105
-    SERVO_LEFT = 50
-    SERVO_RIGHT = 135
+    SERVO_RIGHT = 50   # Right turn (lower value)
+    SERVO_LEFT = 135   # Left turn (higher value)
     MOTOR_SPEED_MAX = 255
 
     if endpoint == 'arm':
@@ -130,8 +130,9 @@ def translate_http_to_uart(endpoint: str, args: dict):
         angle_str = args.get('angle', '105')
         try:
             angle = int(angle_str)
-            if angle < SERVO_LEFT or angle > SERVO_RIGHT:
-                return False, f"Angle must be {SERVO_LEFT}-{SERVO_RIGHT}", None
+            # SERVO_RIGHT (50) is minimum, SERVO_LEFT (135) is maximum
+            if angle < SERVO_RIGHT or angle > SERVO_LEFT:
+                return False, f"Angle must be {SERVO_RIGHT}-{SERVO_LEFT}", None
             return True, f"STEER: {angle}°", f"C:SET_STEER:{angle}"
         except ValueError:
             return False, "Invalid angle value", None
@@ -407,7 +408,7 @@ def initialize_autopilot_if_needed():
         autopilot_controller = AutoPilotController(
             video_streamer=video_streamer,
             command_sender=command_sender,
-            pid_kp=0.045,
+            pid_kp=0.06,  # Increased from 0.045 for more aggressive response
             pid_ki=0.002,
             pid_kd=0.02,
             pid_tolerance=40,
@@ -791,7 +792,50 @@ def autopilot_status():
         return jsonify({'error': 'Auto-pilot controller not initialized'}), 503
     
     status = autopilot_controller.get_status()
+    pid_params = autopilot_controller.get_pid_parameters()
+    status['pid_parameters'] = pid_params
     return jsonify(status)
+
+@app.route('/autopilot/pid', methods=['POST'])
+def autopilot_update_pid():
+    """Update PID parameters."""
+    global autopilot_controller
+    if autopilot_controller is None:
+        return jsonify({'error': 'Auto-pilot controller not initialized'}), 503
+    
+    data = request.get_json() or {}
+    kp = data.get('kp')
+    ki = data.get('ki')
+    kd = data.get('kd')
+    
+    # Validate parameters
+    if kp is not None and (not isinstance(kp, (int, float)) or kp < 0):
+        return jsonify({'error': 'Invalid kp value'}), 400
+    if ki is not None and (not isinstance(ki, (int, float)) or ki < 0):
+        return jsonify({'error': 'Invalid ki value'}), 400
+    if kd is not None and (not isinstance(kd, (int, float)) or kd < 0):
+        return jsonify({'error': 'Invalid kd value'}), 400
+    
+    # Update parameters
+    autopilot_controller.update_pid_parameters(kp=kp, ki=ki, kd=kd)
+    
+    # Return updated parameters
+    updated_params = autopilot_controller.get_pid_parameters()
+    return jsonify({
+        'status': 'ok',
+        'message': 'PID parameters updated',
+        'pid_parameters': updated_params
+    })
+
+@app.route('/autopilot/pid', methods=['GET'])
+def autopilot_get_pid():
+    """Get current PID parameters."""
+    global autopilot_controller
+    if autopilot_controller is None:
+        return jsonify({'error': 'Auto-pilot controller not initialized'}), 503
+    
+    pid_params = autopilot_controller.get_pid_parameters()
+    return jsonify(pid_params)
 
 
 @app.route('/health')

@@ -12,8 +12,8 @@ SERVO_LEFT = 135   # Left turn (higher value)
 
 # PID angle constants
 PID_STRAIGHT = -3  # Special value for "go straight"
-PID_MIN = -22
-PID_MAX = 22
+PID_MIN = -30  # Increased from -22 for more aggressive turns
+PID_MAX = 30   # Increased from 22 for more aggressive turns
 
 
 class AngleConverter:
@@ -23,25 +23,26 @@ class AngleConverter:
         """Initialize the angle converter."""
         # Calculate conversion factor: servo range / PID range
         # Servo range: 135 - 50 = 85 degrees (42.5 each side from center)
-        # PID range: 22 - (-22) = 44 degrees (22 each side)
-        # Conversion: 42.5 / 22 ≈ 1.93 degrees servo per degree PID
+        # PID range: 30 - (-30) = 60 degrees (30 each side)
+        # Use more of the servo range for aggressive turns: ~1.42 degrees servo per degree PID
         # NOTE: Since 50 is right and 135 is left, we need to invert the conversion
         # Positive PID angle (right turn) → lower servo value (50)
         # Negative PID angle (left turn) → higher servo value (135)
+        # Using aggressive factor to utilize more servo range
         self.conversion_factor = (SERVO_CENTER - SERVO_RIGHT) / PID_MAX
     
     def convert(self, pid_angle: float) -> int:
         """
-        Convert PID angle to ESP32 servo angle.
+        Convert steering angle to ESP32 servo angle.
         
         Args:
-            pid_angle: PID controller angle (-22 to +22, or -3 for straight)
+            pid_angle: Steering angle from curvature (-30 to +30 degrees, or 0 for straight)
             
         Returns:
             Servo angle (50-135, where 105 is center)
         """
-        # Special case: PID angle -3 means "go straight" → servo center
-        if abs(pid_angle - PID_STRAIGHT) < 0.5:
+        # Special case: angle between -6 and 6 degrees means "go straight" → servo center
+        if abs(pid_angle) <= 6.0:
             return SERVO_CENTER
         
         # Convert PID angle to servo angle

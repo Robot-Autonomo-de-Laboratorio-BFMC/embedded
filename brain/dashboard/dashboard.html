@@ -418,7 +418,7 @@
                             <span id="autopilot-status" style="color: #ffc107; font-weight: bold;">Checking...</span>
                         </div>
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                            <span style="color: #fff;">PID Angle:</span>
+                            <span style="color: #fff;">Steering Angle:</span>
                             <span id="autopilot-pid-angle" style="color: #fff;">--</span>
                         </div>
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
@@ -583,12 +583,14 @@
                     if (steerValue) steerValue.textContent = `${steer}°`;
                     if (steerDisplay) {
                         const center = 105;
-                        const displayAngle = steer - center;
-                        if (displayAngle === 0) {
+                        // NOTE: Servo is inverted - 50 = right, 135 = left
+                        if (steer === center) {
                             steerDisplay.textContent = 'Center: 105°';
-                        } else if (displayAngle > 0) {
+                        } else if (steer < center) {
+                            // Lower value (50) = right turn
                             steerDisplay.textContent = `Right: ${steer}°`;
                         } else {
+                            // Higher value (135) = left turn
                             steerDisplay.textContent = `Left: ${steer}°`;
                         }
                     }
@@ -690,12 +692,14 @@
                                 steerValue.textContent = `${angle}°`;
                                 
                                 const center = 105;
-                                const displayAngle = angle - center;
-                                if (displayAngle === 0) {
+                                // NOTE: Servo is inverted - 50 = right, 135 = left
+                                if (angle === center) {
                                     steerDisplay.textContent = 'Center: 105°';
-                                } else if (displayAngle > 0) {
+                                } else if (angle < center) {
+                                    // Lower value (50) = right turn
                                     steerDisplay.textContent = `Right: ${angle}°`;
                                 } else {
+                                    // Higher value (135) = left turn
                                     steerDisplay.textContent = `Left: ${angle}°`;
                                 }
                                 
@@ -971,12 +975,14 @@
             if (steerValue) steerValue.textContent = `${angle}°`;
             if (steerDisplay) {
                 const center = 105;
-                const displayAngle = angle - center;
-                if (displayAngle === 0) {
+                // NOTE: Servo is inverted - 50 = right, 135 = left
+                if (angle === center) {
                     steerDisplay.textContent = 'Center: 105°';
-                } else if (displayAngle > 0) {
+                } else if (angle < center) {
+                    // Lower value (50) = right turn
                     steerDisplay.textContent = `Right: ${angle}°`;
                 } else {
+                    // Higher value (135) = left turn
                     steerDisplay.textContent = `Left: ${angle}°`;
                 }
             }
@@ -1080,7 +1086,7 @@
                         statusEl.style.color = data.is_running ? '#28a745' : '#dc3545';
                     }
                     
-                    // Update PID angle
+                    // Update steering angle
                     const pidAngleEl = document.getElementById('autopilot-pid-angle');
                     if (pidAngleEl && data.last_pid_angle !== null && data.last_pid_angle !== undefined) {
                         pidAngleEl.textContent = `${data.last_pid_angle.toFixed(2)}°`;
@@ -1103,6 +1109,7 @@
                     } else if (commandCountEl) {
                         commandCountEl.textContent = '0';
                     }
+                    
                 } else {
                     // Auto-pilot not available or error
                     const statusEl = document.getElementById('autopilot-status');
@@ -1120,6 +1127,7 @@
                 }
             }
         }
+
 
         // Debug view toggle function
         function toggleDebugView() {

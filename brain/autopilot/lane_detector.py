@@ -38,7 +38,8 @@ class PIDController:
             control_signal = -3 
         else:
             control_signal = self.Kp * proportional + self.Ki * self.integral + self.Kd * derivative
-            control_signal = max(min(control_signal, 22), -22) # Limitar el ángulo
+            # Increased limit from 22 to 30 for more aggressive turns
+            control_signal = max(min(control_signal, 30), -30) # Limitar el ángulo
         return control_signal
 
 # ======================================================================
@@ -273,23 +274,20 @@ class MarcosLaneDetector_Advanced:
         angle_rad = math.atan2(dx, -dy)
         curvature_angle_deg = math.degrees(angle_rad)
         
-        # Limitar el ángulo de curvatura para visualización
+        # Limitar el ángulo de curvatura al rango válido
         curvature_angle_deg = max(min(curvature_angle_deg, 30), -30)
         
-        # --- USAR PID CONTROLLER CON EL ERROR ---
-        # Calcular dt para el PID
-        current_time = time.time()
-        dt = current_time - self.last_time
-        if dt <= 0:
-            dt = 0.033  # Default a ~30 FPS si dt es inválido
-        self.last_time = current_time
+        # --- USAR CURVATURA DIRECTAMENTE (SIN PID) ---
+        # Usar el ángulo de curvatura directamente como ángulo de dirección
+        # El ángulo de curvatura ya está en grados y representa la dirección del carril
+        # Positivo = carril se curva hacia la derecha → girar a la derecha
+        # Negativo = carril se curva hacia la izquierda → girar a la izquierda
+        # Rango: -30 a +30 grados
+        steering_angle = curvature_angle_deg
         
-        # Usar el PID controller con el error para obtener un ángulo de dirección suave
-        # El PID está diseñado para trabajar con errores en píxeles directamente
-        # El PID devuelve un ángulo en el rango -22 a +22 (o -3 para ir recto)
-        # Error positivo (carril a la derecha) → ángulo positivo → girar a la derecha
-        # Error negativo (carril a la izquierda) → ángulo negativo → girar a la izquierda
-        steering_angle = self.pid_controller.compute(error, dt)
+        # Si el ángulo está entre -6 y 6 grados, ir recto
+        if abs(steering_angle) <= 6.0:
+            steering_angle = 0.0
 
         # --- 6. Visualización (de tu nuevo script) ---
         # Vista aérea sin procesar (solo la transformación)
@@ -336,17 +334,15 @@ class MarcosLaneDetector_Advanced:
         original_perpective_lane_image = cv2.warpPerspective(transformed_frame, self.inv_matrix, (640, 480))
         result = cv2.addWeighted(original_frame, 1, original_perpective_lane_image, 0.5, 0)
         
-        # Mostrar el ángulo PID (usado para control) y el ángulo de curvatura (visualización)
-        cv2.putText(result, f'PID Angle: {steering_angle:.2f} deg', (30, 110), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        cv2.putText(result, f'Curvature: {curvature_angle_deg:.2f} deg', (30, 150), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
+        # Mostrar el ángulo de curvatura (usado para control)
+        cv2.putText(result, f'Steering Angle: {steering_angle:.2f} deg', (30, 110), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
         cv2.putText(result, f'Error: {error:.2f} px', (30, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
         
         # Agregar texto a la vista aérea con líneas
-        cv2.putText(bird_view_with_lines, f'PID Angle: {steering_angle:.2f} deg', (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        cv2.putText(bird_view_with_lines, f'Curvature: {curvature_angle_deg:.2f} deg', (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
-        cv2.putText(bird_view_with_lines, f'Error: {error:.2f} px', (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        cv2.putText(bird_view_with_lines, f'Lane Center: {lane_center:.1f}', (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        cv2.putText(bird_view_with_lines, f'Car Position: {car_position_x}', (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        cv2.putText(bird_view_with_lines, f'Steering Angle: {steering_angle:.2f} deg', (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        cv2.putText(bird_view_with_lines, f'Error: {error:.2f} px', (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        cv2.putText(bird_view_with_lines, f'Lane Center: {lane_center:.1f}', (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        cv2.putText(bird_view_with_lines, f'Car Position: {car_position_x}', (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
         # Empaquetar imágenes de depuración para mostrarlas fuera
         debug_images = {
