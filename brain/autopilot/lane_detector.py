@@ -71,80 +71,154 @@ class MarcosLaneDetector_Advanced:
         # Usar toda la ventana del birdview para el histograma
         histogram = np.sum(mask[mask.shape[0]//2:, :], axis=0)
         midpoint = int(histogram.shape[0]/2)
-        left_base = np.argmax(histogram[:midpoint])
-        right_base = np.argmax(histogram[midpoint:]) + midpoint
+        
+        # 1. Calcular los picos brutos (brute force peak finding)
+        raw_left_base = np.argmax(histogram[:midpoint])
+        raw_right_base = np.argmax(histogram[midpoint:]) + midpoint
+
+        # =========================================================
+        # --- VALIDACIÓN DE CONTENIDO BLANCO EN ZONA INFERIOR ---
+        # =========================================================
+        # Verificar si hay suficiente contenido blanco en la zona inferior de cada lado
+        BOTTOM_ZONE_HEIGHT = 100  # Altura de la zona inferior a verificar (píxeles desde abajo)
+        MIN_WHITE_PIXELS = 20  # Mínimo de píxeles blancos requeridos en la zona inferior
+        SEARCH_WINDOW_WIDTH = 100  # Ancho de la ventana de búsqueda alrededor del pico
+        
+        # Zona inferior de la máscara (últimos BOTTOM_ZONE_HEIGHT píxeles)
+        bottom_zone = mask[mask.shape[0] - BOTTOM_ZONE_HEIGHT:, :]
+        
+        # Verificar carril izquierdo: buscar contenido blanco en zona inferior izquierda
+        left_zone_x_start = max(0, raw_left_base - SEARCH_WINDOW_WIDTH // 2)
+        left_zone_x_end = min(bottom_zone.shape[1], raw_left_base + SEARCH_WINDOW_WIDTH // 2)
+        left_bottom_zone = bottom_zone[:, left_zone_x_start:left_zone_x_end]
+        left_white_pixels = np.sum(left_bottom_zone > 0)
+        
+        # Verificar carril derecho: buscar contenido blanco en zona inferior derecha
+        right_zone_x_start = max(0, raw_right_base - SEARCH_WINDOW_WIDTH // 2)
+        right_zone_x_end = min(bottom_zone.shape[1], raw_right_base + SEARCH_WINDOW_WIDTH // 2)
+        right_bottom_zone = bottom_zone[:, right_zone_x_start:right_zone_x_end]
+        right_white_pixels = np.sum(right_bottom_zone > 0)
+        
+        # Descartar carriles sin suficiente contenido blanco en la zona inferior
+        if left_white_pixels < MIN_WHITE_PIXELS:
+            raw_left_base = -1  # Descartar carril izquierdo
+        
+        if right_white_pixels < MIN_WHITE_PIXELS:
+            raw_right_base = -1  # Descartar carril derecho
+        
+        # =========================================================
+        # --- CORRECCIÓN DE FUSIÓN (VALIDACIÓN DE DISTANCIA) ---
+        # =========================================================
+        CONFIDENCE_THRESHOLD = 50  # Altura mínima del pico para considerarlo real
+        
+        # 2. Verificar si están demasiado cerca o solapadas (solo si ambos están válidos)
+        if raw_left_base != -1 and raw_right_base != -1 and raw_right_base - raw_left_base < self.MIN_LANE_DISTANCE_PX:
+            # 3. Si están muy cerca, determinar qué pico es más fuerte (confianza)
+            left_peak_height = histogram[raw_left_base]
+            right_peak_height = histogram[raw_right_base]
+            
+            # 4. PRIORIZACIÓN Y DESCARTE (priorizar carril derecho)
+            if right_peak_height > left_peak_height:
+                # El carril derecho es más fuerte: lo mantenemos.
+                left_base = -1 
+                right_base = raw_right_base
+            elif left_peak_height > right_peak_height:
+                # El carril izquierdo es más fuerte: lo mantenemos.
+                right_base = -1
+                left_base = raw_left_base
+            else:
+                # Si son iguales (o muy débiles), priorizar el derecho (como pediste)
+                # O si no tienen suficiente altura, descartar ambos.
+                if right_peak_height < CONFIDENCE_THRESHOLD:
+                    left_base = -1
+                    right_base = -1
+                else:
+                    # Ambos son buenos, pero están fusionados, priorizamos derecha
+                    left_base = -1
+                    right_base = raw_right_base 
+        else:
+            # 5. Si están lo suficientemente separados, usar ambos picos (o el que esté disponible)
+            left_base = raw_left_base
+            right_base = raw_right_base
+        
+        # =========================================================
         
         y = 472
         lx, ly, rx, ry = [], [], [], []
         msk = mask.copy() # Copia para dibujar las ventanas
 
         while y > 0:
-            # Ventana Izquierda
-            img = mask[y-40:y, left_base-50:left_base+50]
-            contours, _ = cv2.findContours(img, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-            found_left = False
-            for contour in contours:
-                M = cv2.moments(contour)
-                if M["m00"] != 0:
-                    cx = int(M["m10"]/M["m00"])
-                    cy = int(M["m01"]/M["m00"])
-                    lx.append(left_base-50 + cx)
-                    ly.append(y-40 + cy)
-                    left_base = left_base-50 + cx
-                    found_left = True
-                    break  # Solo tomar el primer contorno encontrado
-            
-            # Si no encontró nada, expandir la búsqueda en la ventana actual
-            if not found_left and y > 40:
-                # Buscar en una ventana más ancha
-                search_width = 150
-                img_expanded = mask[y-40:y, max(0, left_base-search_width//2):min(mask.shape[1], left_base+search_width//2)]
-                contours_expanded, _ = cv2.findContours(img_expanded, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-                for contour in contours_expanded:
+            # --- VENTANA IZQUIERDA (Solo busca si left_base != -1) ---
+            if left_base != -1:
+                img = mask[y-40:y, left_base-50:left_base+50]
+                contours, _ = cv2.findContours(img, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+                found_left = False
+                for contour in contours:
                     M = cv2.moments(contour)
                     if M["m00"] != 0:
                         cx = int(M["m10"]/M["m00"])
                         cy = int(M["m01"]/M["m00"])
-                        lx.append(max(0, left_base-search_width//2) + cx)
+                        lx.append(left_base-50 + cx)
                         ly.append(y-40 + cy)
-                        left_base = max(0, left_base-search_width//2) + cx
+                        left_base = left_base-50 + cx
                         found_left = True
-                        break
+                        break  # Solo tomar el primer contorno encontrado
+                
+                # Si no encontró nada, expandir la búsqueda en la ventana actual
+                if not found_left and y > 40:
+                    # Buscar en una ventana más ancha
+                    search_width = 150
+                    img_expanded = mask[y-40:y, max(0, left_base-search_width//2):min(mask.shape[1], left_base+search_width//2)]
+                    contours_expanded, _ = cv2.findContours(img_expanded, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+                    for contour in contours_expanded:
+                        M = cv2.moments(contour)
+                        if M["m00"] != 0:
+                            cx = int(M["m10"]/M["m00"])
+                            cy = int(M["m01"]/M["m00"])
+                            lx.append(max(0, left_base-search_width//2) + cx)
+                            ly.append(y-40 + cy)
+                            left_base = max(0, left_base-search_width//2) + cx
+                            found_left = True
+                            break
             
-            # Ventana Derecha
-            img = mask[y-40:y, right_base-50:right_base+50]
-            contours, _ = cv2.findContours(img, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-            found_right = False
-            for contour in contours:
-                M = cv2.moments(contour)
-                if M["m00"] != 0:
-                    cx = int(M["m10"]/M["m00"])
-                    cy = int(M["m01"]/M["m00"])
-                    rx.append(right_base-50 + cx)
-                    ry.append(y-40 + cy)
-                    right_base = right_base-50 + cx
-                    found_right = True
-                    break  # Solo tomar el primer contorno encontrado
-            
-            # Si no encontró nada, expandir la búsqueda en la ventana actual
-            if not found_right and y > 40:
-                # Buscar en una ventana más ancha
-                search_width = 150
-                img_expanded = mask[y-40:y, max(0, right_base-search_width//2):min(mask.shape[1], right_base+search_width//2)]
-                contours_expanded, _ = cv2.findContours(img_expanded, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-                for contour in contours_expanded:
+            # --- VENTANA DERECHA (Solo busca si right_base != -1) ---
+            if right_base != -1:
+                img = mask[y-40:y, right_base-50:right_base+50]
+                contours, _ = cv2.findContours(img, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+                found_right = False
+                for contour in contours:
                     M = cv2.moments(contour)
                     if M["m00"] != 0:
                         cx = int(M["m10"]/M["m00"])
                         cy = int(M["m01"]/M["m00"])
-                        rx.append(max(0, right_base-search_width//2) + cx)
+                        rx.append(right_base-50 + cx)
                         ry.append(y-40 + cy)
-                        right_base = max(0, right_base-search_width//2) + cx
+                        right_base = right_base-50 + cx
                         found_right = True
-                        break
-                    
-            cv2.rectangle(msk, (left_base-50,y), (left_base+50,y-40), (255,255,255), 2)
-            cv2.rectangle(msk, (right_base-50,y), (right_base+50,y-40), (255,255,255), 2)
+                        break  # Solo tomar el primer contorno encontrado
+                
+                # Si no encontró nada, expandir la búsqueda en la ventana actual
+                if not found_right and y > 40:
+                    # Buscar en una ventana más ancha
+                    search_width = 150
+                    img_expanded = mask[y-40:y, max(0, right_base-search_width//2):min(mask.shape[1], right_base+search_width//2)]
+                    contours_expanded, _ = cv2.findContours(img_expanded, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+                    for contour in contours_expanded:
+                        M = cv2.moments(contour)
+                        if M["m00"] != 0:
+                            cx = int(M["m10"]/M["m00"])
+                            cy = int(M["m01"]/M["m00"])
+                            rx.append(max(0, right_base-search_width//2) + cx)
+                            ry.append(y-40 + cy)
+                            right_base = max(0, right_base-search_width//2) + cx
+                            found_right = True
+                            break
+            
+            # DIBUJO DE RECTÁNGULOS (Solo si no están deshabilitados)
+            if left_base != -1:
+                cv2.rectangle(msk, (left_base-50,y), (left_base+50,y-40), (255,255,255), 2)
+            if right_base != -1:
+                cv2.rectangle(msk, (right_base-50,y), (right_base+50,y-40), (255,255,255), 2)
             y -= 40
             
         # --- 4. Polyfit y Lógica de Estimación (de tu nuevo script) ---
