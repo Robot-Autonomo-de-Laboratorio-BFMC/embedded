@@ -239,8 +239,27 @@ class MarcosLaneDetector_Advanced:
             x1 = fit1[0]*y_ref**2 + fit1[1]*y_ref + fit1[2]
             x2 = fit2[0]*y_ref**2 + fit2[1]*y_ref + fit2[2]
             return abs(x2 - x1)
+        
+        # Helper function to calculate curvature angle from a single line fit
+        def calculate_curvature_angle(fit, y_ref=480, lookahead=100):
+            """Calculate curvature angle from a single line fit"""
+            y_current = y_ref
+            y_ahead = max(0, y_ref - lookahead)
+            
+            x_current = fit[0] * y_current**2 + fit[1] * y_current + fit[2]
+            x_ahead = fit[0] * y_ahead**2 + fit[1] * y_ahead + fit[2]
+            
+            dx = x_ahead - x_current
+            dy = y_ahead - y_current
+            
+            angle_rad = math.atan2(dx, -dy)
+            return math.degrees(angle_rad)
 
         # Decidir qué líneas usar (priorizando el carril derecho primero)
+        # Determinar ancho adaptativo basado en curvatura
+        CURVATURE_THRESHOLD = 7.0  # Grados: menor a esto se considera recto
+        STRAIGHT_LANE_WIDTH_REDUCTION = 60  # Reducción de píxeles para rectas
+        
         # CASO 1: Ambas líneas detectadas - verificar distancia mínima
         if left_fit_current is not None and right_fit_current is not None:
             distance = get_line_distance(left_fit_current, right_fit_current)
@@ -252,20 +271,32 @@ class MarcosLaneDetector_Advanced:
                 self.prev_right_fit = right_fit
             else:
                 # Líneas demasiado cercanas - priorizar carril derecho
+                # Calcular curvatura para determinar ancho
+                curvature = abs(calculate_curvature_angle(right_fit_current))
+                lane_width = self.LANE_WIDTH_PX if curvature >= CURVATURE_THRESHOLD else (self.LANE_WIDTH_PX - STRAIGHT_LANE_WIDTH_REDUCTION)
+                
                 right_fit = right_fit_current
-                left_fit = right_fit - [0, 0, self.LANE_WIDTH_PX]
+                left_fit = right_fit - [0, 0, lane_width]
                 self.prev_left_fit = left_fit
                 self.prev_right_fit = right_fit
         # CASO 2: Solo carril derecho detectado (prioridad)
         elif right_fit_current is not None:
+            # Calcular curvatura para determinar ancho
+            curvature = abs(calculate_curvature_angle(right_fit_current))
+            lane_width = self.LANE_WIDTH_PX if curvature >= CURVATURE_THRESHOLD else (self.LANE_WIDTH_PX - STRAIGHT_LANE_WIDTH_REDUCTION)
+            
             right_fit = right_fit_current
-            left_fit = right_fit - [0, 0, self.LANE_WIDTH_PX]
+            left_fit = right_fit - [0, 0, lane_width]
             self.prev_left_fit = left_fit
             self.prev_right_fit = right_fit
         # CASO 3: Solo carril izquierdo detectado
         elif left_fit_current is not None:
+            # Calcular curvatura para determinar ancho
+            curvature = abs(calculate_curvature_angle(left_fit_current))
+            lane_width = self.LANE_WIDTH_PX if curvature >= CURVATURE_THRESHOLD else (self.LANE_WIDTH_PX - STRAIGHT_LANE_WIDTH_REDUCTION)
+            
             left_fit = left_fit_current
-            right_fit = left_fit + [0, 0, self.LANE_WIDTH_PX]
+            right_fit = left_fit + [0, 0, lane_width]
             self.prev_left_fit = left_fit
             self.prev_right_fit = right_fit
         # CASO 4: Usar líneas previas si están disponibles
