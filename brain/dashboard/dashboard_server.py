@@ -424,9 +424,9 @@ def initialize_autopilot_if_needed():
             video_streamer=video_streamer,
             command_sender=command_sender,
             threshold=180,
-            pid_kp=0.43,
-            pid_ki=0.002,
-            pid_kd=0.12,
+            pid_kp=0.8380,
+            pid_ki=0.0100,
+            pid_kd=0.4300,
             max_angle=30.0,
             deadband=6.0
         )

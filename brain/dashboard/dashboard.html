@@ -730,7 +730,7 @@
                     <label
                       >Kp:
                       <span id="pid-kp-value" class="pid-value"
-                        >0.43</span
+                        >0.8380</span
                       ></label
                     >
                     <input
@@ -739,7 +739,7 @@
                       min="0"
                       max="1"
                       step="0.001"
-                      value="0.43"
+                      value="0.8380"
                       oninput="updatePIDParameter('kp', this.value)"
                     />
                   </div>
@@ -747,16 +747,16 @@
                     <label
                       >Ki:
                       <span id="pid-ki-value" class="pid-value"
-                        >0.002</span
+                        >0.0100</span
                       ></label
                     >
                     <input
                       type="range"
                       id="pid-ki-slider"
                       min="0"
-                      max="0.01"
-                      step="0.0001"
-                      value="0.002"
+                      max="0.5"
+                      step="0.001"
+                      value="0.0100"
                       oninput="updatePIDParameter('ki', this.value)"
                     />
                   </div>
@@ -764,7 +764,7 @@
                     <label
                       >Kd:
                       <span id="pid-kd-value" class="pid-value"
-                        >0.12</span
+                        >0.4300</span
                       ></label
                     >
                     <input
@@ -773,7 +773,7 @@
                       min="0"
                       max="0.5"
                       step="0.001"
-                      value="0.12"
+                      value="0.4300"
                       oninput="updatePIDParameter('kd', this.value)"
                     />
                   </div>
