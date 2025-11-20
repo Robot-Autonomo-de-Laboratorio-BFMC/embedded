@@ -995,15 +995,17 @@
           >
             <div style="display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; margin-bottom: 8px;">
               <h2 class="section-title" style="margin: 0;">Camera View</h2>
-              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px; color: #fff;">
-                <input
-                  type="checkbox"
-                  id="debug-views-toggle"
-                  onchange="toggleDebugViews()"
-                  style="cursor: pointer;"
-                />
-                <span>Debug Views</span>
-              </label>
+              <div style="display: flex; align-items: center; gap: 6px;">
+                <span style="font-size: 10px; color: #fff;">Debug Views</span>
+                <label class="toggle-switch">
+                  <input
+                    type="checkbox"
+                    id="debug-views-toggle"
+                    onchange="toggleDebugViews(this.checked)"
+                  />
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
             </div>
             <div
               style="
@@ -1998,12 +2000,15 @@
         logPanel.classList.toggle("visible");
       }
 
-      function toggleDebugViews() {
+      function toggleDebugViews(checked) {
         const toggle = document.getElementById("debug-views-toggle");
         const mainSection = document.getElementById("main-camera-section");
         const debugSection = document.getElementById("debug-views-section");
         
-        if (toggle.checked) {
+        // Use the parameter if provided, otherwise get from toggle
+        const isChecked = checked !== undefined ? checked : toggle.checked;
+        
+        if (isChecked) {
           // Show debug views, hide main camera
           mainSection.style.display = "none";
           debugSection.style.display = "flex";
@@ -2014,7 +2019,7 @@
         }
         
         // Save state to localStorage
-        localStorage.setItem("dashboard_debug_views_enabled", toggle.checked ? "true" : "false");
+        localStorage.setItem("dashboard_debug_views_enabled", isChecked ? "true" : "false");
       }
 
       function restoreDebugViewsState() {
