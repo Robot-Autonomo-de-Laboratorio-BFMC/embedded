@@ -447,6 +447,50 @@ def initialize_autopilot_if_needed():
         print("[UART] Autopilot controller not initialized - video streamer not available", file=sys.stderr)
         return False
 
+def initialize_sign_detection_if_needed():
+    """Initialize sign detection controller if conditions are met."""
+    global sign_detection_controller, video_streamer, serial_conn
+    
+    # Only initialize if not already initialized
+    if sign_detection_controller is not None:
+        return True
+    
+    # Check if we have all required components
+    if SignDetectionController is None:
+        print("[UART] Sign detection modules not available", file=sys.stderr)
+        return False
+    
+    if not serial_conn or not serial_conn.is_open:
+        print("[UART] Serial port not connected", file=sys.stderr)
+        return False
+    
+    # Initialize video streamer if not already done
+    if video_streamer is None and VideoStreamer is not None:
+        print("[UART] Initializing video streamer...", file=sys.stderr)
+        video_streamer = VideoStreamer()
+        if not video_streamer.initialize():
+            print("[UART] Video streamer initialization failed", file=sys.stderr)
+            video_streamer = None
+            return False
+        print("[UART] Video streamer initialized", file=sys.stderr)
+    
+    # Initialize sign detection controller
+    if video_streamer is not None:
+        print("[UART] Initializing sign detection controller...", file=sys.stderr)
+        sign_detection_controller = SignDetectionController(
+            video_streamer=video_streamer,
+            confidence_threshold=0.6
+        )
+        if not sign_detection_controller.initialize():
+            print("[UART] Sign detection controller initialization failed", file=sys.stderr)
+            sign_detection_controller = None
+            return False
+        print("[UART] Sign detection controller initialized (not started - use /sign_detection/start)", file=sys.stderr)
+        return True
+    else:
+        print("[UART] Sign detection controller not initialized - video streamer not available", file=sys.stderr)
+        return False
+
 @app.route('/uart/connect', methods=['POST'])
 def uart_connect():
     """Connect to ESP32 via UART."""
@@ -475,16 +519,25 @@ def uart_connect():
         # Try to initialize autopilot if modules are available
         autopilot_initialized = initialize_autopilot_if_needed()
         
+        # Try to initialize sign detection if modules are available
+        sign_detection_initialized = initialize_sign_detection_if_needed()
+        
         response = {
             'status': 'ok',
             'message': f'Connected to {port}',
             'port': port,
             'baudrate': UART_BAUD_RATE,
-            'autopilot_available': autopilot_initialized
+            'autopilot_available': autopilot_initialized,
+            'sign_detection_available': sign_detection_initialized
         }
         
         if not autopilot_initialized:
             response['warning'] = 'Autopilot not initialized - check camera connection and module availability'
+        if not sign_detection_initialized:
+            if 'warning' in response:
+                response['warning'] += '; Sign detection not initialized - check camera connection and module availability'
+            else:
+                response['warning'] = 'Sign detection not initialized - check camera connection and module availability'
 
         return jsonify(response)
     except Exception as e:
@@ -494,13 +547,17 @@ def uart_connect():
 @app.route('/uart/disconnect', methods=['POST'])
 def uart_disconnect():
     """Disconnect from ESP32."""
-    global serial_conn, serial_read_buffer, autopilot_controller
+    global serial_conn, serial_read_buffer, autopilot_controller, sign_detection_controller
 
     stop_serial_reader()
     
     # Stop autopilot if running
     if autopilot_controller:
         autopilot_controller.stop()
+    
+    # Stop sign detection if running
+    if sign_detection_controller:
+        sign_detection_controller.stop()
 
     if serial_conn and serial_conn.is_open:
         serial_conn.close()
@@ -874,23 +931,37 @@ def autopilot_get_pid():
 @app.route('/sign_detection/start', methods=['POST'])
 def sign_detection_start():
     """Start the sign detection controller."""
-    global sign_detection_controller, video_streamer
+    global sign_detection_controller
     
-    if SignDetectionController is None:
-        return jsonify({'error': 'Sign detection module not available'}), 503
-    
-    if video_streamer is None:
-        return jsonify({'error': 'Video streamer not initialized'}), 503
-    
-    # Initialize if not already initialized
+    # Try to initialize if not already initialized
     if sign_detection_controller is None:
-        sign_detection_controller = SignDetectionController(
-            video_streamer=video_streamer,
-            confidence_threshold=0.6
-        )
-        if not sign_detection_controller.initialize():
-            sign_detection_controller = None
-            return jsonify({'error': 'Failed to initialize sign detection controller'}), 500
+        initialized = initialize_sign_detection_if_needed()
+        if not initialized:
+            # Get detailed status for error message
+            status = {
+                'error': 'Sign detection controller not initialized',
+                'details': {
+                    'modules_available': {
+                        'SignDetectionController': SignDetectionController is not None,
+                        'VideoStreamer': VideoStreamer is not None
+                    },
+                    'serial_connected': serial_conn is not None and serial_conn.is_open if serial_conn else False,
+                    'video_streamer_initialized': video_streamer is not None
+                },
+                'suggestions': []
+            }
+            
+            if not status['details']['serial_connected']:
+                status['suggestions'].append('Connect UART port first')
+            if not status['details']['video_streamer_initialized']:
+                if not status['details']['modules_available']['VideoStreamer']:
+                    status['suggestions'].append('Install autopilot modules: pip install opencv-python numpy')
+                else:
+                    status['suggestions'].append('Connect camera USB device')
+            if not status['details']['modules_available']['SignDetectionController']:
+                status['suggestions'].append('Sign detection modules not found - check that traffic_vision module is available')
+            
+            return jsonify(status), 503
     
     success = sign_detection_controller.start()
     if success:
@@ -1184,21 +1255,6 @@ if __name__ == '__main__':
         video_streamer = VideoStreamer()
         if video_streamer.initialize():
             print("✓ Video streamer initialized")
-            
-            # Initialize sign detection controller if available
-            if SignDetectionController is not None:
-                print("Initializing sign detection controller...")
-                sign_detection_controller = SignDetectionController(
-                    video_streamer=video_streamer,
-                    confidence_threshold=0.6
-                )
-                if sign_detection_controller.initialize():
-                    print("✓ Sign detection controller initialized (not started - use /sign_detection/start)")
-                else:
-                    print("⚠ Sign detection controller initialization failed")
-                    sign_detection_controller = None
-            else:
-                print("⚠ Sign detection controller not available - traffic vision modules not found")
         else:
             print("⚠ Video streamer initialization failed - video features disabled")
             video_streamer = None
