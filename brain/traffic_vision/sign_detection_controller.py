@@ -29,7 +29,7 @@ class SignDetectionController:
         
         Args:
             video_streamer: VideoStreamer instance for getting frames
-            model_path: Path to YOLO model file (default: weights/best.pt)
+            model_path: Path to YOLO model file (default: traffic_vision/weights/best.pt)
             confidence_threshold: Minimum confidence for detections (default: 0.6)
         """
         self.video_streamer = video_streamer
@@ -38,7 +38,7 @@ class SignDetectionController:
         # Determine model path
         if model_path is None:
             script_dir = Path(__file__).parent
-            model_path = script_dir.parent / "weights" / "best.pt"
+            model_path = script_dir / "weights" / "best.pt"
         
         self.model_path = str(model_path)
         self.model = None
@@ -258,4 +258,3 @@ class SignDetectionController:
             with self.lock:
                 self.confidence_threshold = threshold
             print(f"[SignDetectionController] Confidence threshold updated to {threshold}")
-
