@@ -25,6 +25,7 @@ class VideoStreamer:
         self.lock = threading.Lock()
         self.is_running = False
         self.current_frame = None
+        self.current_frame_jpeg = None  # Cached JPEG-encoded frame
         self.frame_ready = threading.Event()
     
     def initialize(self) -> bool:
@@ -71,21 +72,30 @@ class VideoStreamer:
                     if grabbed:
                         ret, frame = self.camera.retrieve()
                         if ret:
-                            # Minimize lock time - copy frame outside lock
-                            frame_copy = frame.copy()
-                            with self.lock:
-                                self.current_frame = frame_copy
-                                self.frame_ready.set()
+                            # Encode frame to JPEG once in capture thread to avoid blocking Flask threads
+                            ret_jpeg, buffer_jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                            if ret_jpeg:
+                                frame_copy = frame.copy()
+                                jpeg_bytes = buffer_jpeg.tobytes()
+                                with self.lock:
+                                    self.current_frame = frame_copy
+                                    self.current_frame_jpeg = jpeg_bytes
+                                    self.frame_ready.set()
                         else:
                             print("[VideoStreamer] Warning: Failed to retrieve frame")
                     else:
                         # If grab fails, try read() as fallback
                         ret, frame = self.camera.read()
                         if ret:
-                            frame_copy = frame.copy()
-                            with self.lock:
-                                self.current_frame = frame_copy
-                                self.frame_ready.set()
+                            # Encode frame to JPEG once in capture thread
+                            ret_jpeg, buffer_jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                            if ret_jpeg:
+                                frame_copy = frame.copy()
+                                jpeg_bytes = buffer_jpeg.tobytes()
+                                with self.lock:
+                                    self.current_frame = frame_copy
+                                    self.current_frame_jpeg = jpeg_bytes
+                                    self.frame_ready.set()
                         else:
                             print("[VideoStreamer] Warning: Failed to read frame")
                             time.sleep(0.01)  # Small delay if camera is not ready
@@ -130,7 +140,7 @@ class VideoStreamer:
     def generate_mjpeg(self):
         """
         Generate MJPEG stream frames.
-        Optimized to avoid blocking other requests.
+        Optimized to avoid blocking - uses pre-encoded JPEG frames from capture thread.
         
         Yields:
             JPEG-encoded frames as bytes
@@ -147,20 +157,22 @@ class VideoStreamer:
             
             # Throttle frame requests to avoid overwhelming the lock
             if elapsed >= frame_interval:
-                # Get frame with short timeout to avoid blocking
-                frame = self.get_frame(timeout=0.01)
-                if frame is not None:
+                # Get pre-encoded JPEG frame with short timeout to avoid blocking
+                jpeg_bytes = None
+                if self.lock.acquire(timeout=0.01):
                     try:
-                        # Encode frame as JPEG
-                        ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                        if ret:
-                            last_frame_time = current_time
-                            yield (b'--frame\r\n'
-                                   b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-                        else:
-                            time.sleep(0.01)  # Small delay if encoding fails
+                        if self.current_frame_jpeg is not None:
+                            jpeg_bytes = self.current_frame_jpeg
+                    finally:
+                        self.lock.release()
+                
+                if jpeg_bytes is not None:
+                    try:
+                        last_frame_time = current_time
+                        yield (b'--frame\r\n'
+                               b'Content-Type: image/jpeg\r\n\r\n' + jpeg_bytes + b'\r\n')
                     except Exception as e:
-                        print(f"[VideoStreamer] Error encoding frame: {e}")
+                        print(f"[VideoStreamer] Error yielding frame: {e}")
                         time.sleep(0.01)
                 else:
                     # No frame available, wait a bit but not too long

@@ -710,8 +710,9 @@ def generate_debug_mjpeg(image_key):
                            b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
         else:
             # No debug image available, try to show regular video frame as fallback
+            # Use short timeout to avoid blocking other requests
             if video_streamer is not None:
-                frame = video_streamer.get_frame()
+                frame = video_streamer.get_frame(timeout=0.01)  # Short timeout to avoid blocking
                 if frame is not None:
                     ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
                     if ret:
