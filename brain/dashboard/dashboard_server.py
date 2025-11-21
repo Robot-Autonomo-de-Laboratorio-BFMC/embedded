@@ -783,6 +783,28 @@ def autopilot_start():
     
     # Try to initialize if not already initialized
     if autopilot_controller is None:
+        # Quick checks before potentially blocking initialization
+        if CommandSender is None or AutoPilotController is None:
+            return jsonify({
+                'error': 'Auto-pilot controller not initialized',
+                'details': {
+                    'modules_available': {
+                        'CommandSender': CommandSender is not None,
+                        'AutoPilotController': AutoPilotController is not None,
+                        'VideoStreamer': VideoStreamer is not None
+                    }
+                },
+                'suggestions': ['Autopilot modules not found - check that you are in brain/dashboard directory']
+            }), 503
+        
+        if not serial_conn or not serial_conn.is_open:
+            return jsonify({
+                'error': 'Auto-pilot controller not initialized',
+                'details': {'serial_connected': False},
+                'suggestions': ['Connect UART port first']
+            }), 503
+        
+        # Initialize (may block briefly if camera is slow, but optimized to be fast)
         initialized = initialize_autopilot_if_needed()
         if not initialized:
             # Get detailed status for error message
@@ -1296,7 +1318,9 @@ if __name__ == '__main__':
     print("=" * 60)
 
     try:
-        app.run(host=args.host, port=args.port, debug=args.debug)
+        # Use threaded=True to handle multiple requests concurrently
+        # This prevents blocking when video streamer is capturing frames
+        app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)
     finally:
         # Cleanup on shutdown
         if sign_detection_controller:

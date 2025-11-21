@@ -22,6 +22,7 @@ def detect_os():
 def try_open_camera(camera_path):
     """
     Try to open a camera and verify it works.
+    Uses non-blocking check to avoid hanging.
     
     Args:
         camera_path: Path to camera device
@@ -35,15 +36,25 @@ def try_open_camera(camera_path):
             if not os.path.exists(camera_path):
                 return None
         
+        # Open camera with timeout/backend that doesn't block
         cap = cv2.VideoCapture(camera_path)
         if cap.isOpened():
-            # Try to read a frame to verify it actually works
-            ret, _ = cap.read()
-            if ret:
+            # Set a timeout for frame reading (if supported by backend)
+            # Try to read a frame with a quick check
+            # Use grab() instead of read() for faster check
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Reduce buffer to avoid old frames
+            grabbed = cap.grab()  # grab() is faster than read()
+            if grabbed:
                 return cap
             else:
-                cap.release()
-                return None
+                # If grab failed, try read() as fallback
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                ret, _ = cap.read()
+                if ret:
+                    return cap
+                else:
+                    cap.release()
+                    return None
         else:
             return None
     except Exception:

@@ -63,17 +63,35 @@ class VideoStreamer:
             return
         
         def capture_loop():
+            import time
             while self.is_running:
                 try:
-                    ret, frame = self.camera.read()
-                    if ret:
-                        with self.lock:
-                            self.current_frame = frame.copy()
-                            self.frame_ready.set()
+                    # Use grab() + retrieve() for better performance and less blocking
+                    grabbed = self.camera.grab()
+                    if grabbed:
+                        ret, frame = self.camera.retrieve()
+                        if ret:
+                            # Minimize lock time - copy frame outside lock
+                            frame_copy = frame.copy()
+                            with self.lock:
+                                self.current_frame = frame_copy
+                                self.frame_ready.set()
+                        else:
+                            print("[VideoStreamer] Warning: Failed to retrieve frame")
                     else:
-                        print("[VideoStreamer] Warning: Failed to read frame")
+                        # If grab fails, try read() as fallback
+                        ret, frame = self.camera.read()
+                        if ret:
+                            frame_copy = frame.copy()
+                            with self.lock:
+                                self.current_frame = frame_copy
+                                self.frame_ready.set()
+                        else:
+                            print("[VideoStreamer] Warning: Failed to read frame")
+                            time.sleep(0.01)  # Small delay if camera is not ready
                 except Exception as e:
                     print(f"[VideoStreamer] Error capturing frame: {e}")
+                    time.sleep(0.01)  # Small delay on error to avoid tight loop
         
         thread = threading.Thread(target=capture_loop, daemon=True)
         thread.start()
@@ -85,8 +103,14 @@ class VideoStreamer:
         Returns:
             Current frame (numpy array) or None if no frame available
         """
+        # Minimize lock time - copy reference first, then copy frame outside lock
+        frame_ref = None
         with self.lock:
-            return self.current_frame.copy() if self.current_frame is not None else None
+            if self.current_frame is not None:
+                frame_ref = self.current_frame
+        
+        # Copy outside lock to avoid blocking other requests
+        return frame_ref.copy() if frame_ref is not None else None
     
     def generate_mjpeg(self):
         """
