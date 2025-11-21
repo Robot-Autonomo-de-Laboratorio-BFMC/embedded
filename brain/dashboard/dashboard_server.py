@@ -16,27 +16,62 @@ import queue
 # Import auto-pilot modules
 import sys
 import os
-# Add parent directory to path to import autopilot modules
+# Add parent directory to path to import brain modules
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, parent_dir)
-try:
-    from autopilot.video_streamer import VideoStreamer
-    from autopilot.autopilot_controller import AutoPilotController
-    from autopilot.command_sender import CommandSender
-except ImportError as e:
-    print(f"Warning: Could not import autopilot modules: {e}")
-    print("Auto-pilot features will be disabled.")
-    VideoStreamer = None
-    AutoPilotController = None
-    CommandSender = None
 
-# Import traffic vision modules
+# Store import errors for debugging
+import_errors = {}
+
 try:
-    from traffic_vision.sign_detection_controller import SignDetectionController
+    from camera.video_streamer import VideoStreamer
 except ImportError as e:
-    print(f"Warning: Could not import traffic vision modules: {e}")
-    print("Traffic sign detection features will be disabled.")
-    SignDetectionController = None
+    print(f"Warning: Could not import VideoStreamer: {e}")
+    VideoStreamer = None
+    import_errors['VideoStreamer'] = str(e)
+
+try:
+    from autopilot_controller import AutoPilotController
+except ImportError as e:
+    print(f"Warning: Could not import AutoPilotController: {e}")
+    AutoPilotController = None
+    import_errors['AutoPilotController'] = str(e)
+except Exception as e:
+    # Catch other exceptions (syntax errors, etc.)
+    print(f"Warning: Error importing AutoPilotController: {e}")
+    AutoPilotController = None
+    import_errors['AutoPilotController'] = str(e)
+
+try:
+    from command_sender import CommandSender
+except ImportError as e:
+    print(f"Warning: Could not import CommandSender: {e}")
+    CommandSender = None
+    import_errors['CommandSender'] = str(e)
+
+try:
+    from lane_detection.lane_detector import MarcosLaneDetector_Advanced
+except ImportError as e:
+    print(f"Warning: Could not import MarcosLaneDetector_Advanced: {e}")
+    MarcosLaneDetector_Advanced = None
+    import_errors['MarcosLaneDetector_Advanced'] = str(e)
+
+# Check if any critical modules are missing
+if VideoStreamer is None or AutoPilotController is None or CommandSender is None or MarcosLaneDetector_Advanced is None:
+    print("Warning: Some autopilot modules are not available. Auto-pilot features will be disabled.")
+
+# Import sign vision modules
+try:
+    from sign_vision.sign_detector import SignDetector
+except ImportError as e:
+    print(f"Warning: Could not import SignDetector: {e}")
+    SignDetector = None
+    import_errors['SignDetector'] = str(e)
+except Exception as e:
+    # Catch other exceptions (syntax errors, etc.)
+    print(f"Warning: Error importing SignDetector: {e}")
+    SignDetector = None
+    import_errors['SignDetector'] = str(e)
 
 # Try to import serial
 try:
@@ -404,47 +439,55 @@ def initialize_autopilot_if_needed():
         return True
     
     # Check if we have all required components
-    if CommandSender is None or AutoPilotController is None:
-        print("[UART] Autopilot modules not available", file=sys.stderr)
+    if CommandSender is None or AutoPilotController is None or MarcosLaneDetector_Advanced is None:
+        print("Autopilot modules not available", file=sys.stderr)
         return False
     
     if not serial_conn or not serial_conn.is_open:
-        print("[UART] Serial port not connected", file=sys.stderr)
+        print("Serial port not connected", file=sys.stderr)
         return False
     
     # Initialize command sender
     if command_sender is None:
         command_sender = CommandSender(write_uart_command)
-        print("[UART] Command sender initialized", file=sys.stderr)
+        print("Command sender initialized", file=sys.stderr)
     
     # Initialize video streamer if not already done
     if video_streamer is None and VideoStreamer is not None:
-        print("[UART] Initializing video streamer...", file=sys.stderr)
+        print("Initializing video streamer...", file=sys.stderr)
         video_streamer = VideoStreamer()
         if not video_streamer.initialize():
-            print("[UART] Video streamer initialization failed", file=sys.stderr)
+            print("Video streamer initialization failed", file=sys.stderr)
             video_streamer = None
             return False
-        print("[UART] Video streamer initialized", file=sys.stderr)
+        print("Video streamer initialized", file=sys.stderr)
     
     # Initialize autopilot controller
     if video_streamer is not None:
-        print("[UART] Initializing autopilot controller...", file=sys.stderr)
+        if MarcosLaneDetector_Advanced is None:
+            print("Lane detector module not available", file=sys.stderr)
+            return False
+        
+        print("Initializing autopilot controller...", file=sys.stderr)
+        
+        # Instantiate lane detector strategy
+        lane_detector = MarcosLaneDetector_Advanced(threshold=180)
+        
         # Initialize autopilot controller with default parameters
         autopilot_controller = AutoPilotController(
             video_streamer=video_streamer,
             command_sender=command_sender,
-            threshold=180,
+            lane_detector=lane_detector,
             pid_kp=0.8380,
             pid_ki=0.0100,
             pid_kd=0.4300,
             max_angle=30.0,
             deadband=6.0
         )
-        print("[UART] Autopilot controller initialized (not started - use /autopilot/start)", file=sys.stderr)
+        print("Autopilot controller initialized (not started - use /autopilot/start)", file=sys.stderr)
         return True
     else:
-        print("[UART] Autopilot controller not initialized - video streamer not available", file=sys.stderr)
+        print("Autopilot controller not initialized - video streamer not available", file=sys.stderr)
         return False
 
 def initialize_sign_detection_if_needed():
@@ -456,39 +499,39 @@ def initialize_sign_detection_if_needed():
         return True
     
     # Check if we have all required components
-    if SignDetectionController is None:
-        print("[UART] Sign detection modules not available", file=sys.stderr)
+    if SignDetector is None:
+        print("Sign detection modules not available", file=sys.stderr)
         return False
     
     if not serial_conn or not serial_conn.is_open:
-        print("[UART] Serial port not connected", file=sys.stderr)
+        print("Serial port not connected", file=sys.stderr)
         return False
     
     # Initialize video streamer if not already done
     if video_streamer is None and VideoStreamer is not None:
-        print("[UART] Initializing video streamer...", file=sys.stderr)
+        print("Initializing video streamer...", file=sys.stderr)
         video_streamer = VideoStreamer()
         if not video_streamer.initialize():
-            print("[UART] Video streamer initialization failed", file=sys.stderr)
+            print("Video streamer initialization failed", file=sys.stderr)
             video_streamer = None
             return False
-        print("[UART] Video streamer initialized", file=sys.stderr)
+        print("Video streamer initialized", file=sys.stderr)
     
-    # Initialize sign detection controller
-    if video_streamer is not None:
-        print("[UART] Initializing sign detection controller...", file=sys.stderr)
-        sign_detection_controller = SignDetectionController(
-            video_streamer=video_streamer,
-            confidence_threshold=0.6
-        )
+        # Initialize sign detection controller
+        if video_streamer is not None:
+            print("Initializing sign detection controller...", file=sys.stderr)
+            sign_detection_controller = SignDetector(
+                video_streamer=video_streamer,
+                confidence_threshold=0.6
+            )
         if not sign_detection_controller.initialize():
-            print("[UART] Sign detection controller initialization failed", file=sys.stderr)
+            print("Sign detection controller initialization failed", file=sys.stderr)
             sign_detection_controller = None
             return False
-        print("[UART] Sign detection controller initialized (not started - use /sign_detection/start)", file=sys.stderr)
+        print("Sign detection controller initialized (not started - use /sign_detection/start)", file=sys.stderr)
         return True
     else:
-        print("[UART] Sign detection controller not initialized - video streamer not available", file=sys.stderr)
+        print("Sign detection controller not initialized - video streamer not available", file=sys.stderr)
         return False
 
 @app.route('/uart/connect', methods=['POST'])
@@ -516,29 +559,12 @@ def uart_connect():
         time.sleep(0.1)
         start_serial_reader()
         
-        # Try to initialize autopilot if modules are available
-        autopilot_initialized = initialize_autopilot_if_needed()
-        
-        # Try to initialize sign detection if modules are available
-        sign_detection_initialized = initialize_sign_detection_if_needed()
-        
         response = {
             'status': 'ok',
             'message': f'Connected to {port}',
             'port': port,
             'baudrate': UART_BAUD_RATE,
-            'autopilot_available': autopilot_initialized,
-            'sign_detection_available': sign_detection_initialized
         }
-        
-        if not autopilot_initialized:
-            response['warning'] = 'Autopilot not initialized - check camera connection and module availability'
-        if not sign_detection_initialized:
-            if 'warning' in response:
-                response['warning'] += '; Sign detection not initialized - check camera connection and module availability'
-            else:
-                response['warning'] = 'Sign detection not initialized - check camera connection and module availability'
-
         return jsonify(response)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -618,81 +644,6 @@ def get_status():
             'mode': system_state['mode'],
             'state': system_state['state']
         })
-
-
-# Global debug mode flag
-debug_mode_enabled = False
-
-def generate_main_video_mjpeg():
-    """Generate MJPEG stream from main camera view (raw video)."""
-    import cv2
-    import time
-    import numpy as np
-    
-    global video_streamer
-    
-    # Create a placeholder black image
-    placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
-    cv2.putText(placeholder, 'Camera not initialized', (50, 240), 
-                cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-    
-    while True:
-        if video_streamer is None:
-            # Send placeholder if video streamer not initialized
-            ret, buffer = cv2.imencode('.jpg', placeholder, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            if ret:
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-            time.sleep(0.1)
-            continue
-        
-        # Get frame using proper API method (same as debug view) with short timeout to avoid blocking
-        frame = video_streamer.get_frame(timeout=0.01)
-        
-        if frame is not None:
-            try:
-                # Encode frame to JPEG
-                ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                if ret:
-                    yield (b'--frame\r\n'
-                           b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-                else:
-                    # Encoding failed, send placeholder
-                    ret, buffer = cv2.imencode('.jpg', placeholder, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                    if ret:
-                        yield (b'--frame\r\n'
-                               b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-            except Exception as e:
-                print(f"[Main Video Stream] Error encoding frame: {e}")
-                ret, buffer = cv2.imencode('.jpg', placeholder, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                if ret:
-                    yield (b'--frame\r\n'
-                           b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-        else:
-            # No frame available, send placeholder
-            ret, buffer = cv2.imencode('.jpg', placeholder, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            if ret:
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-        
-        # Throttle to ~30 FPS
-        time.sleep(0.033)
-
-
-@app.route('/video_stream')
-def video_stream():
-    """MJPEG video stream endpoint."""
-    global video_streamer
-    if video_streamer is None:
-        return "Video streamer not initialized", 503
-    
-    try:
-        return Response(
-            stream_with_context(generate_main_video_mjpeg()),
-            mimetype='multipart/x-mixed-replace; boundary=frame'
-        )
-    except Exception as e:
-        return f"Error generating video stream: {e}", 500
 
 
 def generate_debug_mjpeg(image_key):
@@ -815,24 +766,6 @@ def debug_final_result():
     )
 
 
-@app.route('/debug/toggle', methods=['POST'])
-def toggle_debug_mode():
-    """Toggle debug mode on/off."""
-    global debug_mode_enabled
-    debug_mode_enabled = not debug_mode_enabled
-    return jsonify({
-        'debug_mode': debug_mode_enabled,
-        'message': 'Debug mode ' + ('enabled' if debug_mode_enabled else 'disabled')
-    })
-
-
-@app.route('/debug/status', methods=['GET'])
-def debug_status():
-    """Get current debug mode status."""
-    global debug_mode_enabled
-    return jsonify({'debug_mode': debug_mode_enabled})
-
-
 @app.route('/autopilot/start', methods=['POST'])
 def autopilot_start():
     """Start the auto-pilot controller."""
@@ -841,18 +774,23 @@ def autopilot_start():
     # Try to initialize if not already initialized
     if autopilot_controller is None:
         # Quick checks before potentially blocking initialization
-        if CommandSender is None or AutoPilotController is None:
-            return jsonify({
+        if CommandSender is None or AutoPilotController is None or MarcosLaneDetector_Advanced is None:
+            response = {
                 'error': 'Auto-pilot controller not initialized',
                 'details': {
                     'modules_available': {
                         'CommandSender': CommandSender is not None,
                         'AutoPilotController': AutoPilotController is not None,
-                        'VideoStreamer': VideoStreamer is not None
+                        'VideoStreamer': VideoStreamer is not None,
+                        'MarcosLaneDetector_Advanced': MarcosLaneDetector_Advanced is not None
                     }
                 },
                 'suggestions': ['Autopilot modules not found - check that you are in brain/dashboard directory']
-            }), 503
+            }
+            # Add import errors if available
+            if import_errors:
+                response['details']['import_errors'] = import_errors
+            return jsonify(response), 503
         
         if not serial_conn or not serial_conn.is_open:
             return jsonify({
@@ -871,13 +809,18 @@ def autopilot_start():
                     'modules_available': {
                         'CommandSender': CommandSender is not None,
                         'AutoPilotController': AutoPilotController is not None,
-                        'VideoStreamer': VideoStreamer is not None
+                        'VideoStreamer': VideoStreamer is not None,
+                        'MarcosLaneDetector_Advanced': MarcosLaneDetector_Advanced is not None
                     },
                     'serial_connected': serial_conn is not None and serial_conn.is_open if serial_conn else False,
                     'video_streamer_initialized': video_streamer is not None
                 },
                 'suggestions': []
             }
+            
+            # Add import errors if available
+            if import_errors:
+                status['details']['import_errors'] = import_errors
             
             if not status['details']['serial_connected']:
                 status['suggestions'].append('Connect UART port first')
@@ -886,7 +829,7 @@ def autopilot_start():
                     status['suggestions'].append('Install autopilot modules: pip install opencv-python numpy')
                 else:
                     status['suggestions'].append('Connect camera USB device')
-            if not status['details']['modules_available']['AutoPilotController']:
+            if not status['details']['modules_available']['AutoPilotController'] or not status['details']['modules_available']['MarcosLaneDetector_Advanced']:
                 status['suggestions'].append('Autopilot modules not found - check that you are in brain/dashboard directory')
             
             return jsonify(status), 503
@@ -925,15 +868,22 @@ def autopilot_init_status():
         'modules_available': {
             'CommandSender': CommandSender is not None,
             'AutoPilotController': AutoPilotController is not None,
-            'VideoStreamer': VideoStreamer is not None
+            'VideoStreamer': VideoStreamer is not None,
+            'MarcosLaneDetector_Advanced': MarcosLaneDetector_Advanced is not None
         }
     }
+    
+    # Add import errors if available
+    if import_errors:
+        status['import_errors'] = import_errors
     
     # Add reasons if not initialized
     if not status['autopilot_controller_initialized']:
         reasons = []
         if not status['modules_available']['AutoPilotController']:
             reasons.append('AutopilotController module not imported')
+        if not status['modules_available']['MarcosLaneDetector_Advanced']:
+            reasons.append('MarcosLaneDetector_Advanced module not imported')
         if not status['modules_available']['CommandSender']:
             reasons.append('CommandSender module not imported')
         if not status['serial_connected']:
@@ -1021,7 +971,7 @@ def sign_detection_start():
                 'error': 'Sign detection controller not initialized',
                 'details': {
                     'modules_available': {
-                        'SignDetectionController': SignDetectionController is not None,
+                        'SignDetector': SignDetector is not None,
                         'VideoStreamer': VideoStreamer is not None
                     },
                     'serial_connected': serial_conn is not None and serial_conn.is_open if serial_conn else False,
@@ -1030,6 +980,10 @@ def sign_detection_start():
                 'suggestions': []
             }
             
+            # Add import errors if available
+            if import_errors:
+                status['details']['import_errors'] = import_errors
+            
             if not status['details']['serial_connected']:
                 status['suggestions'].append('Connect UART port first')
             if not status['details']['video_streamer_initialized']:
@@ -1037,8 +991,8 @@ def sign_detection_start():
                     status['suggestions'].append('Install autopilot modules: pip install opencv-python numpy')
                 else:
                     status['suggestions'].append('Connect camera USB device')
-            if not status['details']['modules_available']['SignDetectionController']:
-                status['suggestions'].append('Sign detection modules not found - check that traffic_vision module is available')
+            if not status['details']['modules_available']['SignDetector']:
+                status['suggestions'].append('Sign detection modules not found - check that sign_vision module is available')
             
             return jsonify(status), 503
     

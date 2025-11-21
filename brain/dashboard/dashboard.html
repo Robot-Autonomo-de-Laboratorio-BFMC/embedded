@@ -982,54 +982,12 @@
 
         <!-- Right Panel: Video Feeds -->
         <div class="right-panel">
-          <!-- Camera View Header (Always visible) -->
+          <!-- Camera View Header -->
           <div style="display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; margin-bottom: 8px;">
-            <h2 class="section-title" style="margin: 0;">Camera View</h2>
-            <div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
-              <span style="font-size: 10px; color: #333; font-weight: bold; white-space: nowrap;">Debug Views</span>
-              <label class="toggle-switch" style="flex-shrink: 0;">
-                <input
-                  type="checkbox"
-                  id="debug-views-toggle"
-                  onchange="toggleDebugViews(this.checked)"
-                />
-                <span class="toggle-slider"></span>
-              </label>
-            </div>
+            <h2 class="section-title" style="margin: 0;">Camera Views</h2>
           </div>
           
-          <!-- Main Camera View (Default) -->
-          <div
-            class="section"
-            id="main-camera-section"
-            style="
-              flex: 1;
-              display: flex;
-              flex-direction: column;
-              min-height: 0;
-            "
-          >
-            <div
-              style="
-                flex: 1;
-                min-height: 0;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-              "
-            >
-              <div class="video-container" style="width: 100%; height: 100%">
-                <img
-                  src="/video_stream"
-                  alt="Main Camera"
-                  style="width: 100%; height: auto"
-                />
-                <div class="video-label">Main Camera</div>
-              </div>
-            </div>
-          </div>
-          
-          <!-- Debug Views (Hidden by default) -->
+          <!-- Debug Views (Always visible) -->
           <div
             class="section"
             id="debug-views-section"
@@ -1038,7 +996,6 @@
               display: flex;
               flex-direction: column;
               min-height: 0;
-              display: none;
             "
           >
             <div
@@ -1865,7 +1822,6 @@
       // Initialize - restore slider values and system status from localStorage
       restoreSliderValues();
       restoreSystemStatus();
-      restoreDebugViewsState();
 
       // PID parameter update functions
       let pidUpdateTimeout = null;
@@ -2025,50 +1981,6 @@
       function toggleLogs() {
         const logPanel = document.getElementById("log-panel");
         logPanel.classList.toggle("visible");
-      }
-
-      function toggleDebugViews(checked) {
-        const toggle = document.getElementById("debug-views-toggle");
-        const mainSection = document.getElementById("main-camera-section");
-        const debugSection = document.getElementById("debug-views-section");
-        
-        // Use the parameter if provided, otherwise get from toggle
-        const isChecked = checked !== undefined ? checked : toggle.checked;
-        
-        if (isChecked) {
-          // Show debug views, hide main camera
-          mainSection.style.display = "none";
-          debugSection.style.display = "flex";
-        } else {
-          // Show main camera, hide debug views
-          mainSection.style.display = "flex";
-          debugSection.style.display = "none";
-        }
-        
-        // Save state to localStorage
-        localStorage.setItem("dashboard_debug_views_enabled", isChecked ? "true" : "false");
-      }
-
-      function restoreDebugViewsState() {
-        const savedState = localStorage.getItem("dashboard_debug_views_enabled");
-        const toggle = document.getElementById("debug-views-toggle");
-        
-        if (toggle) {
-          // Default to debug views enabled if no saved state
-          if (savedState === null || savedState === undefined) {
-            // No saved state - enable debug views by default
-            toggle.checked = true;
-            toggleDebugViews(true);
-          } else if (savedState === "true") {
-            // Saved state says enabled
-            toggle.checked = true;
-            toggleDebugViews(true);
-          } else {
-            // Saved state says disabled
-            toggle.checked = false;
-            toggleDebugViews(false);
-          }
-        }
       }
 
       // Sign Detection functions
