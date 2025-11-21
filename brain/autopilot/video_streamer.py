@@ -96,43 +96,80 @@ class VideoStreamer:
         thread = threading.Thread(target=capture_loop, daemon=True)
         thread.start()
     
-    def get_frame(self):
+    def get_frame(self, timeout=0.05):
         """
-        Get the current frame.
+        Get the current frame with optional timeout to avoid blocking.
+        
+        Args:
+            timeout: Maximum time to wait for lock (seconds)
         
         Returns:
-            Current frame (numpy array) or None if no frame available
+            Current frame (numpy array) or None if no frame available or timeout
         """
-        # Minimize lock time - copy reference first, then copy frame outside lock
+        import time
+        start_time = time.time()
+        
+        # Try to acquire lock quickly, don't block forever
         frame_ref = None
-        with self.lock:
-            if self.current_frame is not None:
-                frame_ref = self.current_frame
+        if self.lock.acquire(timeout=timeout):
+            try:
+                if self.current_frame is not None:
+                    frame_ref = self.current_frame
+            finally:
+                self.lock.release()
         
         # Copy outside lock to avoid blocking other requests
-        return frame_ref.copy() if frame_ref is not None else None
+        if frame_ref is not None:
+            try:
+                return frame_ref.copy()
+            except Exception as e:
+                print(f"[VideoStreamer] Error copying frame: {e}")
+                return None
+        return None
     
     def generate_mjpeg(self):
         """
         Generate MJPEG stream frames.
+        Optimized to avoid blocking other requests.
         
         Yields:
             JPEG-encoded frames as bytes
         """
-        import io
+        import time
+        
+        last_frame_time = 0
+        frame_interval = 0.033  # ~30 FPS (33ms between frames)
+        max_wait = 0.1  # Maximum wait time if no frame available
         
         while self.is_running:
-            frame = self.get_frame()
-            if frame is not None:
-                # Encode frame as JPEG
-                ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                if ret:
-                    yield (b'--frame\r\n'
-                           b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+            current_time = time.time()
+            elapsed = current_time - last_frame_time
+            
+            # Throttle frame requests to avoid overwhelming the lock
+            if elapsed >= frame_interval:
+                # Get frame with short timeout to avoid blocking
+                frame = self.get_frame(timeout=0.01)
+                if frame is not None:
+                    try:
+                        # Encode frame as JPEG
+                        ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                        if ret:
+                            last_frame_time = current_time
+                            yield (b'--frame\r\n'
+                                   b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+                        else:
+                            time.sleep(0.01)  # Small delay if encoding fails
+                    except Exception as e:
+                        print(f"[VideoStreamer] Error encoding frame: {e}")
+                        time.sleep(0.01)
+                else:
+                    # No frame available, wait a bit but not too long
+                    time.sleep(min(frame_interval, max_wait))
             else:
-                # Wait a bit if no frame available
-                import time
-                time.sleep(0.033)  # ~30 FPS
+                # Wait until next frame time
+                sleep_time = frame_interval - elapsed
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
     
     def stop(self):
         """Stop camera capture and release resources."""
