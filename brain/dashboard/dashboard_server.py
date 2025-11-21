@@ -156,7 +156,7 @@ def translate_http_to_uart(endpoint: str, args: dict):
         angle_str = args.get('angle', '105')
         try:
             angle = int(angle_str)
-            # SERVO_RIGHT (50) is minimum, SERVO_LEFT (135) is maximum
+            # SERVO_RIGHT (50) is minimum, SERVO_LEFT (160) is maximum
             if angle < SERVO_RIGHT or angle > SERVO_LEFT:
                 return False, f"Angle must be {SERVO_RIGHT}-{SERVO_LEFT}", None
             return True, f"STEER: {angle}°", f"C:SET_STEER:{angle}"

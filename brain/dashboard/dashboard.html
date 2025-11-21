@@ -1722,15 +1722,38 @@
             const errorData = await response
               .json()
               .catch(() => ({ error: "Unknown error" }));
-            log(
-              `Failed to start auto-pilot: ${
-                errorData.error || response.status
-              }`,
-              "error"
-            );
+            
+            // Build error message with suggestions if available
+            let errorMessage = `Failed to start auto-pilot: ${errorData.error || response.status}`;
+            if (errorData.suggestions && errorData.suggestions.length > 0) {
+              errorMessage += "\nSuggestions: " + errorData.suggestions.join(", ");
+            }
+            
+            log(errorMessage, "error");
+            
+            // Update status display to show error
+            const statusEl = document.getElementById("autopilot-status");
+            if (statusEl) {
+              if (errorData.error && errorData.error.includes("not initialized")) {
+                statusEl.textContent = "Not Initialized";
+              } else {
+                statusEl.textContent = "Error";
+              }
+              statusEl.style.color = "#dc3545";
+            }
+            
+            // Update status immediately to reflect current state
+            updateAutopilotStatus();
           }
         } catch (error) {
           log(`Error starting auto-pilot: ${error.message}`, "error");
+          
+          // Update status display to show error
+          const statusEl = document.getElementById("autopilot-status");
+          if (statusEl) {
+            statusEl.textContent = "Error";
+            statusEl.style.color = "#dc3545";
+          }
         }
       }
 
