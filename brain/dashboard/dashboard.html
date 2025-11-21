@@ -862,7 +862,7 @@
                   </button>
                   <button
                     class="btn btn-danger"
-                    onclick="stopAutopilot()"
+                    onclick="event.stopPropagation(); stopAutopilot();"
                     style="font-size: 10px; padding: 4px"
                   >
                     STOP
@@ -969,7 +969,7 @@
                   </button>
                   <button
                     class="btn btn-danger"
-                    onclick="stopSignDetection()"
+                    onclick="event.stopPropagation(); stopSignDetection();"
                     style="font-size: 10px; padding: 4px"
                   >
                     STOP
@@ -1716,10 +1716,13 @@
       }
 
       async function stopAutopilot() {
+        console.log("[stopAutopilot] Called");
         try {
+          console.log("[stopAutopilot] Sending POST to /autopilot/stop");
           const response = await fetch(`${getBaseURL()}/autopilot/stop`, {
             method: "POST",
           });
+          console.log("[stopAutopilot] Response:", response.status, response.statusText);
 
           if (response.ok) {
             const data = await response.json();
@@ -2075,10 +2078,13 @@
       }
 
       async function stopSignDetection() {
+        console.log("[stopSignDetection] Called");
         try {
+          console.log("[stopSignDetection] Sending POST to /sign_detection/stop");
           const response = await fetch(`${getBaseURL()}/sign_detection/stop`, {
             method: "POST",
           });
+          console.log("[stopSignDetection] Response:", response.status, response.statusText);
 
           if (response.ok) {
             const data = await response.json();
