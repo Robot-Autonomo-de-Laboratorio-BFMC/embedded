@@ -1,12 +1,35 @@
 import cv2
 import numpy as np
 import math
+from abc import ABC, abstractmethod
 
 # ======================================================================
-# --- LANE DETECTOR ---
+# --- LANE DETECTOR BASE CLASS ---
 # ======================================================================
 
-class MarcosLaneDetector_Advanced:
+class LaneDetector(ABC):
+    """Abstract base class for lane detection strategies."""
+    
+    @abstractmethod
+    def get_lane_metrics(self, frame):
+        """
+        Detect lanes and return deviation angle.
+        
+        Args:
+            frame: Input frame from camera (numpy array)
+            
+        Returns:
+            tuple: (angle_deviation_deg, debug_images)
+                - angle_deviation_deg: Deviation angle in degrees (float or None)
+                - debug_images: Dictionary of debug images (dict or None)
+        """
+        pass
+
+# ======================================================================
+# --- LANE DETECTOR IMPLEMENTATIONS ---
+# ======================================================================
+
+class MarcosLaneDetector_Advanced(LaneDetector):
     """
     Lane detector that only handles lane detection logic.
     Returns angle_desviacion_deg (deviation angle) for PID control.

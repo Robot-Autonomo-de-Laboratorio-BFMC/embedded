@@ -13,12 +13,12 @@ import cv2
 import torch
 from ultralytics import YOLO
 
-# Import VideoStreamer from autopilot (shared camera resource)
+# Import VideoStreamer from camera module (shared camera resource)
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from autopilot.video_streamer import VideoStreamer
+from camera.video_streamer import VideoStreamer
 
 
-class SignDetectionController:
+class SignDetector:
     """Manages traffic sign detection using YOLO model."""
     
     def __init__(self, video_streamer: VideoStreamer, 
@@ -29,7 +29,7 @@ class SignDetectionController:
         
         Args:
             video_streamer: VideoStreamer instance for getting frames
-            model_path: Path to YOLO model file (default: traffic_vision/weights/best.pt)
+            model_path: Path to YOLO model file (default: sign_vision/weights/best.pt)
             confidence_threshold: Minimum confidence for detections (default: 0.6)
         """
         self.video_streamer = video_streamer
@@ -68,15 +68,15 @@ class SignDetectionController:
     def _load_model(self):
         """Load YOLO model, prioritizing engine if exists."""
         if not os.path.exists(self.model_path):
-            print(f"[SignDetectionController] Error: Model not found: {self.model_path}")
+            print(f"[SignDetector] Error: Model not found: {self.model_path}")
             return None
         
         engine_path = self.model_path.replace('.pt', '.engine')
         
         # Prioritize engine if exists
         if os.path.exists(engine_path):
-            print(f"[SignDetectionController] Engine file found: {engine_path}")
-            print("[SignDetectionController] Using TensorRT optimized model")
+            print(f"[SignDetector] Engine file found: {engine_path}")
+            print("[SignDetector] Using TensorRT optimized model")
             model = YOLO(engine_path, task='detect')
             return model
         
@@ -91,7 +91,7 @@ class SignDetectionController:
                         # Reload as engine (doesn't need .to(device))
                         model = YOLO(engine_path, task='detect')
                 except Exception as e:
-                    print(f"[SignDetectionController] Warning: Could not export to engine: {e}")
+                    print(f"[SignDetector] Warning: Could not export to engine: {e}")
                     # Continue with .pt if export fails
         
         return model
@@ -106,19 +106,19 @@ class SignDetectionController:
         try:
             # Configure GPU
             self.device = self._detect_and_configure_gpu()
-            print(f"[SignDetectionController] Using device: {self.device}")
+            print(f"[SignDetector] Using device: {self.device}")
             
             # Load model
             self.model = self._load_model()
             if self.model is None:
                 return False
             
-            print(f"[SignDetectionController] Model loaded successfully")
-            print(f"[SignDetectionController] Confidence threshold: {self.confidence_threshold}")
+            print(f"[SignDetector] Model loaded successfully")
+            print(f"[SignDetector] Confidence threshold: {self.confidence_threshold}")
             return True
             
         except Exception as e:
-            print(f"[SignDetectionController] Error initializing: {e}")
+            print(f"[SignDetector] Error initializing: {e}")
             return False
     
     def start(self):
@@ -134,7 +134,7 @@ class SignDetectionController:
             self.is_running = True
             self.thread = threading.Thread(target=self._detection_loop, daemon=True)
             self.thread.start()
-            print("[SignDetectionController] Started")
+            print("[SignDetector] Started")
             return True
     
     def stop(self):
@@ -144,7 +144,7 @@ class SignDetectionController:
                 return False
             
             self.is_running = False
-            print("[SignDetectionController] Stopped")
+            print("[SignDetector] Stopped")
             return True
     
     def _detection_loop(self):
@@ -208,7 +208,7 @@ class SignDetectionController:
                 time.sleep(0.033)
                 
             except Exception as e:
-                print(f"[SignDetectionController] Error in detection loop: {e}")
+                print(f"[SignDetector] Error in detection loop: {e}")
                 self.error_count += 1
                 time.sleep(0.1)
     
@@ -257,4 +257,4 @@ class SignDetectionController:
         if 0.0 <= threshold <= 1.0:
             with self.lock:
                 self.confidence_threshold = threshold
-            print(f"[SignDetectionController] Confidence threshold updated to {threshold}")
+            print(f"[SignDetector] Confidence threshold updated to {threshold}")

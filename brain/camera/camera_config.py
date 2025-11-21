@@ -91,14 +91,3 @@ def choose_camera_by_OS():
                 return LINUX_CAMERA_PATH
     else:
         return WINDOWS_CAMERA_PATH
-
-
-def handle_video_capture(window_name, path):
-    cv2.namedWindow(window_name)
-    capture = cv2.VideoCapture(path)
-
-    if not capture.isOpened():
-        print("Error: Could not open video stream.")
-        return None
-
-    return capture

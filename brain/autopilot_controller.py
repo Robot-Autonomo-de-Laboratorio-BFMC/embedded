@@ -6,23 +6,22 @@ Following SRP: This module orchestrates the interaction between detector, conver
 
 import threading
 import time
-import sys
-import os
 
-# Import VehicleControlBrain (main orchestrator)
-from .vehicle_control_brain import VehicleControlBrain
-
-# Import autopilot modules (relative imports within package)
-from .angle_converter import AngleConverter
-from .command_sender import CommandSender
-from .video_streamer import VideoStreamer
+# Import lane following modules
+from lane_detection.lane_detector import LaneDetector
+from lane_detection.pid_controller import PIDController
+from lane_detection.angle_converter import AngleConverter
+# Import shared resources
+from command_sender import CommandSender
+from camera.video_streamer import VideoStreamer
 
 
 class AutoPilotController:
     """Orchestrates lane detection, angle conversion, and command sending."""
     
     def __init__(self, video_streamer: VideoStreamer, command_sender: CommandSender,
-                 threshold: int = 180, pid_kp: float = 0.06, pid_ki: float = 0.002, 
+                 lane_detector: LaneDetector,
+                 pid_kp: float = 0.06, pid_ki: float = 0.002, 
                  pid_kd: float = 0.02, max_angle: float = 30.0, deadband: float = 6.0):
         """
         Initialize the auto-pilot controller.
@@ -30,7 +29,7 @@ class AutoPilotController:
         Args:
             video_streamer: VideoStreamer instance for getting frames
             command_sender: CommandSender instance for sending commands
-            threshold: Image processing threshold
+            lane_detector: LaneDetector strategy instance for lane detection
             pid_kp: PID proportional gain
             pid_ki: PID integral gain
             pid_kd: PID derivative gain
@@ -39,11 +38,11 @@ class AutoPilotController:
         """
         self.video_streamer = video_streamer
         self.command_sender = command_sender
+        self.lane_detector = lane_detector
         self.angle_converter = AngleConverter()
         
-        # Initialize VehicleControlBrain (orchestrates detector + PID)
-        self.control_brain = VehicleControlBrain(
-            lane_threshold=threshold,
+        # Initialize PID controller
+        self.pid_controller = PIDController(
             Kp=pid_kp,
             Ki=pid_ki,
             Kd=pid_kd,
@@ -57,6 +56,9 @@ class AutoPilotController:
         self.pid_kd = pid_kd
         self.max_angle = max_angle
         self.deadband = deadband
+        
+        # Time tracking for PID dt calculation
+        self.last_time = time.time()
         
         self.is_running = False
         self.thread = None
@@ -90,28 +92,74 @@ class AutoPilotController:
                 return False
             
             self.is_running = False
-            print("[AutoPilotController] Stopped")
-            return True
+            print("[AutoPilotController] Stopping...")
+        
+        # Wait for the control loop thread to finish (with timeout)
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=1.0)
+            if self.thread.is_alive():
+                print("[AutoPilotController] Warning: Control loop thread did not stop within timeout")
+            else:
+                print("[AutoPilotController] Stopped")
+        
+        return True
     
     def _control_loop(self):
         """Main control loop running in background thread."""
-        while self.is_running:
+        while True:
+            # Check if still running at the start of each iteration
+            with self.lock:
+                if not self.is_running:
+                    break
+            
             try:
                 # Get frame from video streamer
                 frame = self.video_streamer.get_frame()
+                
+                # Check again after getting frame (stop might have been called)
+                with self.lock:
+                    if not self.is_running:
+                        break
                 
                 if frame is None:
                     time.sleep(0.033)  # Wait ~30ms if no frame
                     continue
                 
-                # Process frame through VehicleControlBrain (detector + PID)
-                steering_angle, debug_images = self.control_brain.process_frame(frame)
+                # Get lane metrics from detector strategy
+                angle_deviation_deg, debug_images = self.lane_detector.get_lane_metrics(frame)
                 
                 # Store debug images for streaming
                 with self.lock:
                     if debug_images is not None:
                         self.last_debug_images = debug_images
-                    # Keep previous debug images if new ones are None (don't overwrite with None)
+                
+                # Handle no lanes detected
+                if angle_deviation_deg is None:
+                    self.pid_controller.reset()
+                    time.sleep(0.033)
+                    continue
+                
+                # Calculate dt for PID
+                current_time = time.time()
+                dt = current_time - self.last_time
+                if dt <= 0:
+                    dt = 0.033  # Default to ~30 FPS if dt is invalid
+                self.last_time = current_time
+                
+                # Check if still running before processing and sending commands
+                with self.lock:
+                    if not self.is_running:
+                        break
+                
+                # Compute PID output (negate deviation for PID error)
+                # Positive deviation (lane to right) → positive steering (turn right)
+                pid_error = -angle_deviation_deg
+                steering_angle = self.pid_controller.compute(pid_error, dt)
+                
+                # Check again before sending command (stop might have been called)
+                with self.lock:
+                    if not self.is_running:
+                        break
                 
                 # Convert steering angle to servo angle
                 servo_angle = self.angle_converter.convert(steering_angle)
@@ -171,15 +219,15 @@ class AutoPilotController:
             if deadband is not None:
                 self.deadband = deadband
             
-            # Update PID controller parameters through VehicleControlBrain
-            self.control_brain.update_pid_parameters(
+            # Update PID controller parameters
+            self.pid_controller.set_parameters(
                 Kp=kp, Ki=ki, Kd=kd, max_angle=max_angle, deadband=deadband
             )
     
     def get_pid_parameters(self) -> dict:
         """Get current PID parameters."""
         with self.lock:
-            pid_params = self.control_brain.get_pid_parameters()
+            pid_params = self.pid_controller.get_parameters()
             return {
                 'kp': pid_params['Kp'],
                 'ki': pid_params['Ki'],

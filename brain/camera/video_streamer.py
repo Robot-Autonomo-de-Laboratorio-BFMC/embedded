@@ -6,13 +6,7 @@ Following SRP: This module only handles video capture and streaming.
 
 import cv2
 import threading
-import sys
-import os
-
-# Import camera_config from parent directory
-parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, parent_dir)
-from camera_config import choose_camera_by_OS
+from .camera_config import choose_camera_by_OS
 
 
 class VideoStreamer:
