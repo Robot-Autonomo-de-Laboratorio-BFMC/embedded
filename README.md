@@ -1,194 +1,158 @@
-# Documento de Arquitectura de Software
-**Proyecto:** Sistema de Control de Vehículo RC (ESP32 / FreeRTOS)  
-**Versión:** 1.1.0  
+# Documento de Arquitectura de Software (SAD)
+
+**Subsistema:** Low-Level Vehicle Controller (VCU)  
+**Plataforma:** ESP32 / FreeRTOS  
+**Versión:** 2.0.0 (Legacy Implementation - Polling Based)  
 **Fecha:** Noviembre 2025  
 
 ---
 
 ## 1. Visión General de la Arquitectura
 
-El sistema implementa una arquitectura de tiempo real basada en eventos (**Event-Driven Real-Time Architecture**), diseñada específicamente para la plataforma ESP32. El diseño prioriza la baja latencia, el determinismo y la seguridad operativa (Safety) sobre el rendimiento de procesamiento masivo.
+El sistema implementa una arquitectura de tiempo real basada en muestreo periódico (**Time-Triggered Architecture**). Las tareas de control se ejecutan a una frecuencia fija definida por `vTaskDelay`, consultando el estado de los mailboxes en cada ciclo.
 
-La comunicación entre subsistemas se basa en el patrón de diseño **"Shared State with Lightweight Notification"**, una adaptación optimizada del mecanismo de *Mailbox* nativo de FreeRTOS.
+Si bien utiliza la estructura de **Mailboxes** para el intercambio de datos thread-safe, el mecanismo de activación de tareas es sincrónico (basado en tiempo) y no asincrónico (basado en eventos).
 
-### 1.1 Drivers Arquitectónicos
+### 1.1 Drivers Arquitectónicos (v2.0)
+El diseño actual prioriza la simplicidad de implementación y la estabilidad del bucle de control periódico.
 
-Las decisiones de diseño responden a los siguientes requisitos no funcionales críticos:
-
-* **Determinismo Temporal:** Garantizar una respuesta de actuación `<1ms` desde la recepción de eventos críticos.
-* **Eficiencia de CPU:** Minimizar los ciclos de reloj desperdiciados en *polling* (espera activa) mediante un modelo puramente reactivo.
-* **Consistencia de Datos (Freshness):** Implementación de semántica *Last-Writer-Wins* para descartar comandos obsoletos en situaciones de congestión.
-* **Concurrencia Segura:** Aislamiento de procesos críticos (Motor/Seguridad) de procesos de comunicación (WiFi/UART) mediante *Core Pinning*.
+* **Ciclo de Control Fijo:** Las tareas de actuación (Motor/Dirección) corren a 100Hz (10ms) independientemente de la llegada de nuevos datos.
+* **Seguridad (Safety):** Se implementa un mecanismo de `Time-To-Live` (TTL) en los datos para detener el vehículo ante pérdida de comunicaciones.
+* **Separación de Núcleos:** Se utiliza *Core Pinning* para separar la lógica de red (Core 1) del control de motores (Core 0).
 
 ---
 
-## 2. Estrategia de Comunicación Inter-Procesos
+## 2. Estrategia de Comunicación Inter-Procesos (IPC)
 
-Para la comunicación entre tareas, esta arquitectura implementa **Notificaciones Directas (Direct Task Notifications)** en lugar del modelo estándar de Colas (Queues).
+La comunicación entre las tareas de recepción (`LinkRxTask`) y las de control (`MotorTask`) se realiza mediante un modelo de **Polling sobre Memoria Compartida**.
 
-### 2.1 Justificación Técnica
+### 2.1 Mecanismo: Polling con Mailbox
+A diferencia de un sistema puramente reactivo, aquí el consumidor es quien marca el ritmo.
 
-De acuerdo con la documentación oficial del Kernel de FreeRTOS, las notificaciones de tareas son una primitiva de sincronización más eficiente que los semáforos binarios y las colas tradicionales:
+1.  **Productor (LinkRx):** Escribe el dato en el `mailbox_t` protegido por Mutex tan pronto llega por UART.
+2.  **Consumidor (MotorTask):**
+    * Duerme durante un periodo fijo (`vTaskDelay(10ms)`).
+    * Despierta.
+    * Bloquea el Mutex y lee el Mailbox.
+    * Si el dato es nuevo y válido, actualiza el PWM.
+    * Vuelve a dormir.
 
-> *"Task notifications have a lower RAM footprint and execute significantly faster than binary semaphores or queues."* — **FreeRTOS Kernel Documentation** [1]
-
-Dada la restricción de tiempo real, se seleccionó este mecanismo para minimizar el *overhead* del kernel en el cambio de contexto.
-
-### 2.2 Implementación del Patrón Mailbox Extendido
-
-Si bien FreeRTOS define un uso de notificaciones como "Mailbox" para valores de 32 bits [2], este sistema extiende dicho concepto para manejar estructuras de datos complejas.
-
-El patrón se implementa en dos fases atómicas:
-
-1.  **Actualización de Estado (Data Plane):** El productor escribe en una estructura `mailbox_t` protegida por un Mutex. Esto garantiza la integridad de datos compuestos (comando + timestamp + valor).
-2.  **Señalización de Evento (Control Plane):** El productor envía una *Task Notification* al consumidor. Esto saca a la tarea de control del estado `Blocked` inmediatamente, sin necesidad de consultar colas intermedias.
+### 2.2 Limitaciones de este Enfoque
+* **Latencia Variable (Jitter):** Existe un retardo de entre 0ms y 10ms desde que el dato llega hasta que se procesa, dependiendo de en qué punto del ciclo de sueño se encuentre la tarea.
+* **Consumo de CPU:** Las tareas despiertan 100 veces por segundo incluso si el vehículo está detenido y no hay comandos nuevos.
 
 ---
 
 ## 3. Vista Lógica y Estructura de Datos
 
-El sistema sigue el principio de **Composición sobre Herencia**, desacoplando los módulos de hardware mediante interfaces de memoria compartida.
-
-### 3.1 Estructura del Mailbox (`mailbox_t`)
-
-La unidad de intercambio de información se define como:
+### 3.1 Estructura del Mailbox
+Se mantiene la estructura robusta que permite validar la frescura de los datos.
 
 ```c
 typedef struct {
-    uint32_t ts_ms;          // Timestamp para validación de latencia
-    topic_t topic;           // Identificador del subsistema
-    command_type_t cmd;      // Instrucción específica
-    int32_t value;           // Payload del comando
-    uint32_t seq;            // Control de secuencia
-    uint32_t ttl_ms;         // Time-to-Live (Mecanismo de Safety)
-    SemaphoreHandle_t mutex; // Primitiva de exclusión mutua
+    uint32_t ts_ms;          // Timestamp de recepción
+    topic_t topic;           // Identificador (Motor, Steer)
+    command_type_t cmd;      // Comando
+    int32_t value;           // Valor PWM/Ángulo
+    uint32_t ttl_ms;         // Vida útil del comando
+    SemaphoreHandle_t mutex; // Protección de lectura/escritura
 } mailbox_t;
 ```
 
-### 3.2 Mecanismos de Seguridad Integrados
-
-* **Safety Barrier (Ultrasonic):** La tarea de ultrasonido opera con la máxima prioridad del sistema, teniendo la capacidad de anular comandos de motor para prevenir colisiones físicas.
-* **Time-to-Live (TTL):** Antes de ejecutar cualquier acción, el consumidor valida: `(now - ts_ms) < ttl_ms`. Si falla, el sistema asume pérdida de enlace y frena.
-* **Emergency Fast-Path:** Los comandos de emergencia utilizan un bit específico en la notificación (`xTaskNotify`), permitiendo una reacción inmediata sin procesar la estructura completa.
-
 ---
 
-## 4. Diagramas de Arquitectura
+## 4. Diagramas de Arquitectura (Comportamiento Actual)
 
-### 4.1 Diagrama de Secuencia (Protocolo de Comunicación)
+### 4.1 Diagrama de Secuencia: Ciclo de Polling
+
+Este diagrama muestra cómo la ejecución de la tarea del motor está **desacoplada temporalmente** de la llegada del dato. Observa cómo el dato puede esperar en el buzón hasta que termine el `Delay`.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant UART as UART
+    participant UART
     participant Producer as LinkRxTask
     participant Data as Motor Mailbox
     participant Consumer as MotorTask
 
-    Note over Consumer: Estado: BLOCKED (Dormido)<br/>Esperando xTaskNotify...
+    Note over Consumer: Estado: BLOCKED (Delay 10ms)
 
+    %% El dato llega mientras la tarea duerme
     UART->>Producer: Recibe "SET_SPEED: 200"
+    Producer->>Data: Escribe {val: 200}
+    Note right of Data: Dato actualizado<br/>(Esperando lectura)
+
+    %% La tarea sigue durmiendo...
+    Note over Consumer: ... (Tiempo muerto) ...
+
+    %% Finalmente despierta por el Timer
+    Note over Consumer: Fin vTaskDelay()
     
-    rect rgb(30, 30, 30)
-        note right of Producer: 1. Fase de Escritura (MAILBOX)
-        Producer->>Data: Escribe {cmd, val, timestamp}
+    rect rgb(40, 40, 50)
+        note right of Consumer: Ciclo de Control (100Hz)
+        Consumer->>Data: Lee Mailbox
+        Data-->>Consumer: Retorna {val: 200}
+        Consumer->>Consumer: Actualizar PWM
     end
 
-    rect rgb(50, 50, 50)
-        note right of Producer: 2. Fase de Evento (NOTIFICATION)
-        Producer->>Consumer: xTaskNotify()
-    end
-
-    Note over Consumer: ¡DESPIERTA! (<1ms)
-
-    rect rgb(30, 30, 30)
-        note right of Consumer: 3. Fase de Lectura y Ejecución
-        Consumer->>Data: Lee copia local
-        
-        alt TTL Válido
-            Consumer->>Consumer: Aplica PWM Motor
-        else TTL Expirado
-            Consumer->>Consumer: Freno de Emergencia
-        end
-    end
-    
+    Note over Consumer: vTaskDelay(10ms)
     Note over Consumer: Vuelve a Dormir
 ```
 
-### 4.2 Diagrama de Despliegue (Multicore)
+### 4.2 Diagrama de Despliegue
 
-Este diagrama refleja la distribución física de tareas según la inicialización del sistema.
+La estructura física es idéntica a la v3.0, pero las líneas de "Notificación" no existen o no son efectivas en la lógica de control principal.
 
 ```mermaid
 graph TD
-    subgraph Core1 ["Core 1: Comms & System"]
-        direction TB
-        LGT[LightsTask<br/>Prio: 1]
-        RX[LinkRxTask<br/>Prio: 4]
-        TX[LinkTxTask<br/>Prio: 2]
-        WEB[WebTask<br/>Prio: 2]
-        SUP[SupervisorTask<br/>Prio: 2]
+    %% === CAPA SUPERIOR: ENTRADAS (CORE 1) ===
+    subgraph Core1 ["Core 1: Inputs & Comms"]
+        RX[LinkRxTask]
+        WEB[WebTask]
+        SUP[Supervisor]
+        TX[LinkTxTask]
     end
 
-    subgraph Shared ["Espacio de Memoria Compartida"]
-        direction TB
-        MB_MOT[("Motor Mailbox")]
-        MB_STR[("Steer Mailbox")]
-        MB_LGT[("Lights Mailbox")]
+    %% === CAPA MEDIA: ALMACENAMIENTO ===
+    subgraph Shared ["Memoria Compartida"]
+        MB_MOT[Motor MB]
+        MB_STR[Steer MB]
+        MB_LGT[Lights MB]
     end
 
-    subgraph Core0 ["Core 0: Safety & Control"]
-        direction TB
-        US["UltrasonicTask<br/>Prio: 5 (SAFETY)"]
-        MOT[MotorTask<br/>Prio: 4]
-        STR[SteerTask<br/>Prio: 3]
+    %% === CAPA INFERIOR: SALIDAS (CORE 0) ===
+    subgraph Actuators ["Actuadores (Core 0 + Lights)"]
+        US["Ultrasonic (Safety)"]
+        MOT["MotorTask (100Hz Loop)"]
+        STR["SteerTask (100Hz Loop)"]
+        LGT["LightsTask (10Hz Loop)"]
     end
 
-    %% Relaciones de Escritura de Datos
-    RX ==>|"Escribe"| MB_MOT
-    RX ==>|"Escribe"| MB_STR
-    RX ==>|"Escribe"| MB_LGT
-    WEB ~~~|"Escribe"| MB_MOT
-    WEB ~~~|"Escribe"| MB_STR
-    WEB ~~~|"Escribe"| MB_LGT
+    %% === FLUJO DE DATOS ===
+    RX --> MB_MOT
+    RX --> MB_STR
+    WEB --> MB_LGT
     
-    %% Relaciones de Notificación (Eventos)
-    RX -.->|"Notify"| MOT
-    RX -.->|"Notify"| STR
-    RX -.->|"Notify"| LGT
+    %% === LECTURA PERIÓDICA (POLLING) ===
+    %% Las líneas punteadas indican lectura asíncrona
+    MB_MOT -.->|"Lee cada 10ms"| MOT
+    MB_STR -.->|"Lee cada 10ms"| STR
+    MB_LGT -.->|"Lee cada 100ms"| LGT
 
-    %% Lectura
-    MB_MOT ==>|"Lee"| MOT
-    MB_STR ==>|"Lee"| STR
-    MB_LGT ==>|"Lee"| LGT
-
-    %% Intervención de Seguridad
-    US -.->|"Emergency Stop<br/>(Direct Notify)"| MOT
+    %% Seguridad
+    US -.->|"Emergency Stop"| MOT
 ```
 
 ---
 
-## 5. Vista de Procesos y Concurrencia
+## 5. Deuda Técnica y Plan de Migración
 
-El sistema utiliza **Multiprocesamiento Asimétrico** sobre los dos núcleos del ESP32. Se ha aislado el **Core 0** para tareas críticas de movimiento y seguridad, mientras que el **Core 1** gestiona la carga variable de comunicaciones e I/O secundario.
+Esta versión (2.0.0) es funcional y estable, pero presenta limitaciones para conducción autónoma de alta velocidad o competición.
 
-### 5.1 Distribución de Carga (Core Affinity)
+### 5.1 Problemas Identificados
+1.  **Latencia de Entrada:** El retraso de hasta 10ms introduce un desfase perceptible entre la visión (Brain) y la acción (Ruedas).
+2.  **Desperdicio de Recursos:** El microcontrolador no entra en modos de bajo consumo efectivos porque despierta constantemente.
+3.  **Sincronización:** No se aprovecha la capacidad del ESP32 para reaccionar a interrupciones de software.
 
-| Núcleo | Rol | Tareas Asignadas | Prioridad | Descripción |
-| :--- | :--- | :--- | :--- | :--- |
-| **Core 0** | **Safety & Motion** | `UltrasonicTask` | **Crítica (5)** | **Capa de Seguridad:** Monitoreo de entorno y prevención de colisiones. Máxima prioridad del sistema. |
-| **Core 0** | **Real-Time Control** | `MotorTask`, `SteerTask` | Alta (3-4) | Generación de PWM preciso y bucles de control. Aislado de interrupciones de red. |
-| **Core 1** | **Comms Ingress** | `LinkRxTask` | Alta (4) | Recepción y decodificación de alta velocidad (UART/WiFi). |
-| **Core 1** | **System & I/O** | `WebTask`, `Supervisor`, `LinkTx`, `Lights` | Media/Baja (1-2) | Gestión de pila TCP/IP, telemetría, watchdog y control de iluminación. |
-
----
-
-## 6. Referencias y Normativa
-
-Para garantizar la adherencia a las mejores prácticas de la industria y la correcta utilización del RTOS, esta arquitectura se basa en las siguientes especificaciones oficiales:
-
-1.  **FreeRTOS Kernel Features - Task Notifications.** Describe las ventajas de rendimiento y memoria de las notificaciones sobre los objetos tradicionales de IPC.  
-    *Fuente:* [https://freertos.org/Documentation/02-Kernel/02-Kernel-features/03-Direct-to-task-notifications/01-Task-notifications](https://freertos.org/Documentation/02-Kernel/02-Kernel-features/03-Direct-to-task-notifications/01-Task-notifications)
-
-2.  **FreeRTOS Kernel Features - Task Notifications Used As Mailbox.** Define el patrón conceptual de sobrescritura de valores (*overwrite*) utilizado para la lógica "Last-Writer-Wins".  
-    *Fuente:* [https://freertos.org/Documentation/02-Kernel/02-Kernel-features/03-Direct-to-task-notifications/05-As-mailbox](https://freertos.org/Documentation/02-Kernel/02-Kernel-features/03-Direct-to-task-notifications/05-As-mailbox)
+### 5.2 Propuesta de Refactor (Hacia v3.0.0)
+Se ha aprobado la migración hacia una arquitectura **Event-Driven** utilizando `Direct Task Notifications` para eliminar el `vTaskDelay`. Esto reducirá la latencia teórica de ~10ms a <0.1ms.
