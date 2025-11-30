@@ -1,285 +1,194 @@
-# Robot Autónomo de Laboratorio - ESP32 FreeRTOS Architecture
+# Documento de Arquitectura de Software
+**Proyecto:** Sistema de Control de Vehículo RC (ESP32 / FreeRTOS)  
+**Versión:** 1.1.0  
+**Fecha:** Noviembre 2025  
 
-![BANNER](https://github.com/nicolas-mangini/esp32-rc-car-mod/assets/72108522/f1f22568-18d2-42b5-bf51-995ad033ce1d)
+---
 
-## Descripción
+## 1. Visión General de la Arquitectura
 
-Sistema de control para auto RC implementado con ESP32, utilizando arquitectura basada en **Mailbox + Task Notifications** con FreeRTOS. El sistema permite controlar motores, dirección y luces mediante comandos recibidos vía UART o interfaz web (Wi-Fi AP).
+El sistema implementa una arquitectura de tiempo real basada en eventos (**Event-Driven Real-Time Architecture**), diseñada específicamente para la plataforma ESP32. El diseño prioriza la baja latencia, el determinismo y la seguridad operativa (Safety) sobre el rendimiento de procesamiento masivo.
 
-## Características Principales
+La comunicación entre subsistemas se basa en el patrón de diseño **"Shared State with Lightweight Notification"**, una adaptación optimizada del mecanismo de *Mailbox* nativo de FreeRTOS.
 
- - **Arquitectura FreeRTOS**: Sistema multitarea con tareas dedicadas por subsistema
-- **Mailbox Pattern**: Comunicación mediante buzones con patrón last-writer-wins (sin colas)
-- **Task Notifications**: Notificaciones eficientes para despertar tareas críticas
-- **Dual Interface**: Control vía UART (921600 baud) y Web (Wi-Fi AP)
-- **Emergency Brake**: Sistema de frenado de emergencia con respuesta <1ms
-- **Time-to-Live**: Comandos con expiración automática para seguridad
-- **Core Pinning**: Distribución optimizada de tareas entre los dos núcleos del ESP32
+### 1.1 Drivers Arquitectónicos
 
-### Sistema de Luces
+Las decisiones de diseño responden a los siguientes requisitos no funcionales críticos:
 
-- **Luz trasera**: LED en el paragolpes trasero que se enciende automáticamente al dar marcha atrás
-- **Luz delantera**: LED en el paragolpes delantero con tres modos:
-  - **ON**: Encendido manual
-  - **OFF**: Apagado manual
-  - **AUTO**: Control automático mediante LDR (se enciende con poca luz)
+* **Determinismo Temporal:** Garantizar una respuesta de actuación `<1ms` desde la recepción de eventos críticos.
+* **Eficiencia de CPU:** Minimizar los ciclos de reloj desperdiciados en *polling* (espera activa) mediante un modelo puramente reactivo.
+* **Consistencia de Datos (Freshness):** Implementación de semántica *Last-Writer-Wins* para descartar comandos obsoletos en situaciones de congestión.
+* **Concurrencia Segura:** Aislamiento de procesos críticos (Motor/Seguridad) de procesos de comunicación (WiFi/UART) mediante *Core Pinning*.
 
-## Software - Arquitectura FreeRTOS
+---
 
-### Arquitectura General
+## 2. Estrategia de Comunicación Inter-Procesos
 
-El sistema utiliza una arquitectura basada en **Mailboxes + Task Notifications** para comunicación entre subsistemas:
+Para la comunicación entre tareas, esta arquitectura implementa **Notificaciones Directas (Direct Task Notifications)** en lugar del modelo estándar de Colas (Queues).
 
-```
-┌─────────────┐      ┌─────────────┐
-│  LinkRxTask │      │   WebTask   │
-│  (UART)     │      │  (Wi-Fi AP) │
-└──────┬──────┘      └──────┬──────┘
-       │                    │
-       └──────────┬──────────┘
-                  │
-       ┌──────────▼──────────┐
-       │   Mailboxes (W)     │
-       │  ┌────────────────┐ │
-       │  │ Motor Mailbox  │ │
-       │  │ Steer Mailbox  │ │
-       │  │ Lights Mailbox │ │
-       │  │ Supervisor MB  │ │
-       │  └────────────────┘ │
-       └──────────┬──────────┘
-                  │
-       ┌──────────▼──────────┐
-       │  Control Tasks (R)  │
-       │  ┌────────────────┐ │
-       │  │  MotorTask     │ │
-       │  │  SteerTask     │ │
-       │  │  LightsTask    │ │
-       │  │  SupervisorTask││
-       │  └────────────────┘ │
-       └─────────────────────┘
-```
+### 2.1 Justificación Técnica
 
-### Mailbox Pattern
+De acuerdo con la documentación oficial del Kernel de FreeRTOS, las notificaciones de tareas son una primitiva de sincronización más eficiente que los semáforos binarios y las colas tradicionales:
 
-Cada subsistema tiene un mailbox que almacena el último comando recibido:
+> *"Task notifications have a lower RAM footprint and execute significantly faster than binary semaphores or queues."* — **FreeRTOS Kernel Documentation** [1]
+
+Dada la restricción de tiempo real, se seleccionó este mecanismo para minimizar el *overhead* del kernel en el cambio de contexto.
+
+### 2.2 Implementación del Patrón Mailbox Extendido
+
+Si bien FreeRTOS define un uso de notificaciones como "Mailbox" para valores de 32 bits [2], este sistema extiende dicho concepto para manejar estructuras de datos complejas.
+
+El patrón se implementa en dos fases atómicas:
+
+1.  **Actualización de Estado (Data Plane):** El productor escribe en una estructura `mailbox_t` protegida por un Mutex. Esto garantiza la integridad de datos compuestos (comando + timestamp + valor).
+2.  **Señalización de Evento (Control Plane):** El productor envía una *Task Notification* al consumidor. Esto saca a la tarea de control del estado `Blocked` inmediatamente, sin necesidad de consultar colas intermedias.
+
+---
+
+## 3. Vista Lógica y Estructura de Datos
+
+El sistema sigue el principio de **Composición sobre Herencia**, desacoplando los módulos de hardware mediante interfaces de memoria compartida.
+
+### 3.1 Estructura del Mailbox (`mailbox_t`)
+
+La unidad de intercambio de información se define como:
 
 ```c
 typedef struct {
-    uint32_t ts_ms;          // Timestamp en milisegundos
-    topic_t topic;            // Tópico del mensaje
-    command_type_t cmd;       // Tipo de comando
-    int32_t value;            // Valor del comando (velocidad, ángulo, etc.)
-    uint32_t seq;             // Número de secuencia
-    uint32_t ttl_ms;          // Time-to-Live en milisegundos
-    bool valid;               // Indica si el mailbox contiene datos válidos
-    SemaphoreHandle_t mutex;  // Mutex para operaciones atómicas
+    uint32_t ts_ms;          // Timestamp para validación de latencia
+    topic_t topic;           // Identificador del subsistema
+    command_type_t cmd;      // Instrucción específica
+    int32_t value;           // Payload del comando
+    uint32_t seq;            // Control de secuencia
+    uint32_t ttl_ms;         // Time-to-Live (Mecanismo de Safety)
+    SemaphoreHandle_t mutex; // Primitiva de exclusión mutua
 } mailbox_t;
 ```
 
-**Características del Mailbox:**
-- **Last-Writer-Wins**: Los comandos antiguos se descartan automáticamente
-- **Time-to-Live**: Los comandos expiran después de un tiempo configurado
-- **Thread-Safe**: Operaciones protegidas con mutex
-- **Zero Backlog**: No hay colas, solo el último comando válido
+### 3.2 Mecanismos de Seguridad Integrados
 
-### Tareas FreeRTOS
+* **Safety Barrier (Ultrasonic):** La tarea de ultrasonido opera con la máxima prioridad del sistema, teniendo la capacidad de anular comandos de motor para prevenir colisiones físicas.
+* **Time-to-Live (TTL):** Antes de ejecutar cualquier acción, el consumidor valida: `(now - ts_ms) < ttl_ms`. Si falla, el sistema asume pérdida de enlace y frena.
+* **Emergency Fast-Path:** Los comandos de emergencia utilizan un bit específico en la notificación (`xTaskNotify`), permitiendo una reacción inmediata sin procesar la estructura completa.
 
-#### MotorTask (Core 0, Priority 4)
-- Lee comandos del mailbox de motor
-- Controla velocidad y dirección del motor de tracción
-- Implementa frenado de emergencia con notificaciones directas (<1ms)
-- Ejecuta a 100 Hz (10ms de período)
+---
 
-#### SteerTask (Core 0, Priority 3)
-- Lee comandos del mailbox de dirección
-- Controla el ángulo del servo de dirección
-- Valida rango de ángulos (centro, izquierda, derecha)
-- Ejecuta a 100 Hz (10ms de período)
+## 4. Diagramas de Arquitectura
 
-#### LightsTask (Core 1, Priority 1)
-- Lee comandos del mailbox de luces
-- Controla LEDs delantero y trasero
-- Modo automático con lectura periódica del LDR
-- Ejecuta a 10 Hz (100ms de período)
+### 4.1 Diagrama de Secuencia (Protocolo de Comunicación)
 
-#### LinkRxTask (Core 1, Priority 4)
-- Recibe comandos vía UART (921600 baud)
-- Parsea mensajes en formato: `CHANNEL:CMD:VALUE`
-- Escribe en los mailboxes correspondientes
-- Maneja comandos de emergencia (BRAKE_NOW, STOP)
+```mermaid
+sequenceDiagram
+    autonumber
+    participant UART as UART
+    participant Producer as LinkRxTask
+    participant Data as Motor Mailbox
+    participant Consumer as MotorTask
 
-#### WebTask (Core 1, Priority 2)
-- Configura Wi-Fi Access Point
-- Sirve página web HTML con controles
-- Procesa comandos HTTP (GET/POST)
-- Escribe en los mailboxes correspondientes
+    Note over Consumer: Estado: BLOCKED (Dormido)<br/>Esperando xTaskNotify...
 
-#### SupervisorTask (Core 1, Priority 2)
-- Monitorea el estado del sistema
-- Implementa watchdog/heartbeat
-- Detecta fallos y activa modos seguros
+    UART->>Producer: Recibe "SET_SPEED: 200"
+    
+    rect rgb(30, 30, 30)
+        note right of Producer: 1. Fase de Escritura (MAILBOX)
+        Producer->>Data: Escribe {cmd, val, timestamp}
+    end
 
-#### LinkTxTask (Core 1, Priority 2)
-- Envía telemetría vía UART
-- Transmite estado del sistema periódicamente
+    rect rgb(50, 50, 50)
+        note right of Producer: 2. Fase de Evento (NOTIFICATION)
+        Producer->>Consumer: xTaskNotify()
+    end
 
-### Task Notifications
+    Note over Consumer: ¡DESPIERTA! (<1ms)
 
-Las tareas de control utilizan notificaciones de FreeRTOS para despertarse eficientemente:
-
-```c
-// En el sender (LinkRxTask, WebTask)
-mailbox_write(&motor_mailbox, TOPIC_MOTOR, CMD_SET_SPEED, value, 200);
-xTaskNotify(motor_task_handle, 0, eNoAction);
-
-// En MotorTask
-void motor_task(void *pvParameters) {
-    while (1) {
-        // Espera notificación (bloquea hasta recibir)
-        xTaskNotifyWait(0, 0, NULL, portMAX_DELAY);
+    rect rgb(30, 30, 30)
+        note right of Consumer: 3. Fase de Lectura y Ejecución
+        Consumer->>Data: Lee copia local
         
-        // Lee mailbox
-        Msg msg;
-        if (mailbox_read(&motor_mailbox, &msg) && !expired(&msg)) {
-            applyMotor(msg.value);
-        } else {
-            applySafeStop(); // Comando expirado
-        }
-    }
-}
+        alt TTL Válido
+            Consumer->>Consumer: Aplica PWM Motor
+        else TTL Expirado
+            Consumer->>Consumer: Freno de Emergencia
+        end
+    end
+    
+    Note over Consumer: Vuelve a Dormir
 ```
 
-**Ventajas:**
-- **Bajo consumo de CPU**: Tareas duermen hasta recibir notificación
-- **Respuesta inmediata**: Despertar de tareas es muy rápido (<1ms)
-- **Sin polling**: No hay chequeos periódicos innecesarios
-- **Minimal overhead**: Menor uso de memoria que colas
+### 4.2 Diagrama de Despliegue (Multicore)
 
-### Emergency Brake
+Este diagrama refleja la distribución física de tareas según la inicialización del sistema.
 
-Sistema de frenado de emergencia con respuesta <1ms:
+```mermaid
+graph TD
+    subgraph Core1 ["Core 1: Comms & System"]
+        direction TB
+        LGT[LightsTask<br/>Prio: 1]
+        RX[LinkRxTask<br/>Prio: 4]
+        TX[LinkTxTask<br/>Prio: 2]
+        WEB[WebTask<br/>Prio: 2]
+        SUP[SupervisorTask<br/>Prio: 2]
+    end
 
-```c
-// En LinkRxTask
-if (channel == CHANNEL_EMERGENCY && cmd == "BRAKE_NOW") {
-    motor_task_trigger_emergency(); // Notificación directa
-}
+    subgraph Shared ["Espacio de Memoria Compartida"]
+        direction TB
+        MB_MOT[("Motor Mailbox")]
+        MB_STR[("Steer Mailbox")]
+        MB_LGT[("Lights Mailbox")]
+    end
 
-// En MotorTask
-uint32_t notification = ulTaskNotifyTake(pdTRUE, 0);
-if (notification & EMERGENCY_NOTIFICATION_BIT) {
-    motor_stop(); // Acción inmediata
-}
+    subgraph Core0 ["Core 0: Safety & Control"]
+        direction TB
+        US["UltrasonicTask<br/>Prio: 5 (SAFETY)"]
+        MOT[MotorTask<br/>Prio: 4]
+        STR[SteerTask<br/>Prio: 3]
+    end
+
+    %% Relaciones de Escritura de Datos
+    RX ==>|"Escribe"| MB_MOT
+    RX ==>|"Escribe"| MB_STR
+    RX ==>|"Escribe"| MB_LGT
+    WEB ~~~|"Escribe"| MB_MOT
+    WEB ~~~|"Escribe"| MB_STR
+    WEB ~~~|"Escribe"| MB_LGT
+    
+    %% Relaciones de Notificación (Eventos)
+    RX -.->|"Notify"| MOT
+    RX -.->|"Notify"| STR
+    RX -.->|"Notify"| LGT
+
+    %% Lectura
+    MB_MOT ==>|"Lee"| MOT
+    MB_STR ==>|"Lee"| STR
+    MB_LGT ==>|"Lee"| LGT
+
+    %% Intervención de Seguridad
+    US -.->|"Emergency Stop<br/>(Direct Notify)"| MOT
 ```
 
-### Interfaces de Control
+---
 
-#### UART (921600 baud)
-Formato de mensajes: `CHANNEL:CMD:VALUE`
+## 5. Vista de Procesos y Concurrencia
 
-Ejemplos:
-- `CONTROL:SET_SPEED:150` - Establece velocidad a 150
-- `CONTROL:SET_STEER:90` - Establece ángulo de dirección a 90°
-- `EMERGENCY:BRAKE_NOW:0` - Freno de emergencia
-- `LIGHTS:SET_MODE:2` - Establece modo de luces (0=OFF, 1=ON, 2=AUTO)
+El sistema utiliza **Multiprocesamiento Asimétrico** sobre los dos núcleos del ESP32. Se ha aislado el **Core 0** para tareas críticas de movimiento y seguridad, mientras que el **Core 1** gestiona la carga variable de comunicaciones e I/O secundario.
 
-#### Web Interface (Wi-Fi AP)
-- **SSID**: Configurable (default: "ESP32-RC-Car")
-- **URL**: `http://192.168.4.1`
-- **Controles**: Botones y sliders para velocidad, dirección y luces
-- **Responsive**: Funciona en dispositivos móviles
+### 5.1 Distribución de Carga (Core Affinity)
 
-### Composición vs Herencia
+| Núcleo | Rol | Tareas Asignadas | Prioridad | Descripción |
+| :--- | :--- | :--- | :--- | :--- |
+| **Core 0** | **Safety & Motion** | `UltrasonicTask` | **Crítica (5)** | **Capa de Seguridad:** Monitoreo de entorno y prevención de colisiones. Máxima prioridad del sistema. |
+| **Core 0** | **Real-Time Control** | `MotorTask`, `SteerTask` | Alta (3-4) | Generación de PWM preciso y bucles de control. Aislado de interrupciones de red. |
+| **Core 1** | **Comms Ingress** | `LinkRxTask` | Alta (4) | Recepción y decodificación de alta velocidad (UART/WiFi). |
+| **Core 1** | **System & I/O** | `WebTask`, `Supervisor`, `LinkTx`, `Lights` | Media/Baja (1-2) | Gestión de pila TCP/IP, telemetría, watchdog y control de iluminación. |
 
-El sistema está diseñado siguiendo el principio de **Composition over Inheritance**:
-- Cada subsistema (motor, dirección, luces) es independiente
-- Comunicación mediante mailboxes (composición)
-- No hay jerarquías de clases, solo funciones y estructuras
-- Facilita testing y mantenimiento
+---
 
-## Compilación y Uso
+## 6. Referencias y Normativa
 
-### Requisitos
+Para garantizar la adherencia a las mejores prácticas de la industria y la correcta utilización del RTOS, esta arquitectura se basa en las siguientes especificaciones oficiales:
 
-- PlatformIO
-- ESP32 Toolchain
-- FreeRTOS (incluido en ESP32 Arduino framework)
+1.  **FreeRTOS Kernel Features - Task Notifications.** Describe las ventajas de rendimiento y memoria de las notificaciones sobre los objetos tradicionales de IPC.  
+    *Fuente:* [https://freertos.org/Documentation/02-Kernel/02-Kernel-features/03-Direct-to-task-notifications/01-Task-notifications](https://freertos.org/Documentation/02-Kernel/02-Kernel-features/03-Direct-to-task-notifications/01-Task-notifications)
 
-### Compilación
-
-```bash
-pio run -e esp32doit-devkit-v1
-```
-
-### Upload
-
-```bash
-pio run -e esp32doit-devkit-v1 -t upload
-```
-
-### Monitor Serial
-
-```bash
-pio device monitor
-```
-
-### Configuración
-
-Los parámetros de configuración se definen en `platformio.ini`:
-- `UART_BAUD`: Velocidad de UART (default: 921600)
-- `SERIAL_BAUD`: Velocidad de Serial Monitor (default: 115200)
-
-## DEMO
-
-https://github.com/nicolas-mangini/esp32-rc-car-mod/assets/72108522/c88e2a87-3ad3-4a92-a44b-5ae4985a6168
-
-## Pruebas / Simulador UART
-
-Para probar el sistema sin la interfaz web, incluimos un simulador UART interactivo.
-
-1) Instalar dependencias de Python:
-
-```bash
-pip install -r test/python/requirements.txt
-```
-
-2) Ejecutar el simulador (modo interactivo):
-
-```bash
-python3 test/python/test_uart_simulator.py
-```
-
-- El simulador auto-detecta puertos y ofrece un REPL con comandos:
-  - `speed <0-255>`
-  - `steer <0-180>`
-  - `lights <off|on|auto>`
-  - `emergency`, `stop`, `demo`, `help`, `quit`
-  - También acepta líneas crudas del protocolo `CHANNEL:CMD:VALUE`.
-
-3) USB vs UART externo
-
-- Conexión por USB (Serial): usar baud 115200 (por defecto del monitor serial). Ejemplo:
-
-```bash
-python3 test/python/test_uart_simulator.py /dev/ttyUSB0 --baud 115200
-```
-
-- Conexión por UART externo en GPIO10 (RX) / GPIO9 (TX): usar baud 921600.
-
-4) Modo no interactivo (envía y sale):
-
-```bash
-python3 test/python/test_uart_simulator.py /dev/ttyUSB0 --non-interactive CONTROL:SET_SPEED:120 LIGHTS:SET_MODE:2
-```
-
-## Conclusión
-
-Este proyecto demuestra la integración exitosa de hardware y software utilizando una arquitectura moderna basada en FreeRTOS. El uso de mailboxes con patrón last-writer-wins y task notifications proporciona:
-
-- **Baja latencia**: Respuesta inmediata a comandos críticos
-- **Eficiencia**: Mínimo uso de CPU y memoria
-- **Confiabilidad**: Sistema robusto con manejo de expiración de comandos
-- **Escalabilidad**: Fácil agregar nuevos subsistemas
-- **Mantenibilidad**: Código modular y bien estructurado
-
-El resultado final es un sistema de control remoto funcional y versátil, con arquitectura profesional adecuada para aplicaciones embebidas de tiempo real.
+2.  **FreeRTOS Kernel Features - Task Notifications Used As Mailbox.** Define el patrón conceptual de sobrescritura de valores (*overwrite*) utilizado para la lógica "Last-Writer-Wins".  
+    *Fuente:* [https://freertos.org/Documentation/02-Kernel/02-Kernel-features/03-Direct-to-task-notifications/05-As-mailbox](https://freertos.org/Documentation/02-Kernel/02-Kernel-features/03-Direct-to-task-notifications/05-As-mailbox)
