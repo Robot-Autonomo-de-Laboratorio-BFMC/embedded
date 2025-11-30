@@ -196,7 +196,13 @@ El sistema utiliza **Multiprocesamiento Asimétrico** sobre los dos núcleos del
 
 La arquitectura actual (v2.0) proporciona una base sólida y estable. Sin embargo, para escenarios de competición o maniobras de alta velocidad que requieren tiempos de reacción en el orden de los microsegundos, se ha planteado una evolución hacia la versión 3.0.
 
-### 6.1 Áreas de Optimización
+### 6.1 Fortalezas del Diseño Actual
+* **Estabilidad de Carga (Determinismo):** Al utilizar una frecuencia de ejecución fija, el consumo de CPU es constante y predecible. El sistema es inmune a "tormentas de interrupciones" si los sensores envían datos excesivos o ruidosos.
+* **Integridad de Datos:** El patrón de **Mailbox con Mutex** garantiza que las tareas de control siempre accedan a una "foto" coherente y completa del estado (Atomicidad), eliminando condiciones de carrera sobre las variables de control.
+* **Aislamiento de Fallos:** La estrategia de **Core Pinning** ha demostrado ser eficaz para evitar que la latencia variable de la pila WiFi/TCP-IP (Core 1) afecte la generación de señales PWM críticas (Core 0).
+* **Seguridad Híbrida:** A pesar de ser un sistema basado en *polling*, la implementación del **Fast-Path de Emergencia** asegura que las paradas críticas (por ultrasonido o botón de pánico) ocurran en tiempo real estricto (<1ms), eludiendo el ciclo de espera.
+
+### 6.2 Áreas de Optimización
 1.  **Reducción de Latencia:** En el modelo actual, el tiempo de respuesta está acotado por el periodo de muestreo (10ms). Una arquitectura basada en eventos eliminaría esta espera.
 2.  **Eficiencia Energética:** La transición a un modelo *Event-Driven* permitiría que el procesador permanezca en estado *Idle* durante los periodos de inactividad, en lugar de despertar periódicamente.
 
