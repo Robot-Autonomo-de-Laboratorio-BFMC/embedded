@@ -200,5 +200,4 @@ La arquitectura actual (v2.0) proporciona una base sólida y estable. Sin embarg
 1.  **Reducción de Latencia:** En el modelo actual, el tiempo de respuesta está acotado por el periodo de muestreo (10ms). Una arquitectura basada en eventos eliminaría esta espera.
 2.  **Eficiencia Energética:** La transición a un modelo *Event-Driven* permitiría que el procesador permanezca en estado *Idle* durante los periodos de inactividad, en lugar de despertar periódicamente.
 
-### 6.2 Próxima Iteración (v3.0.0)
-La siguiente versión extenderá el patrón "Fast-Path" actual a la operación nominal, transformando el sistema de un modelo híbrido a uno puramente reactivo.
+> **Nota:** Se ha redactado la propuesta **`README3.0.0.md`**, una versión que utilizara las notificaciones para reemplazar el polling
