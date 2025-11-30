@@ -145,14 +145,27 @@ graph TD
 
 ---
 
-## 5. Deuda Técnica y Plan de Migración
+## 5. Vista de Procesos y Concurrencia
+
+El sistema utiliza **Multiprocesamiento Asimétrico** sobre los dos núcleos del ESP32. Se ha aislado el **Core 0** para tareas críticas de movimiento y seguridad, mientras que el **Core 1** gestiona la carga variable de comunicaciones e I/O secundario.
+
+### 5.1 Distribución de Carga (Core Affinity)
+
+| Núcleo | Rol | Tareas Asignadas | Prioridad | Descripción |
+| :--- | :--- | :--- | :--- | :--- |
+| **Core 0** | **Safety & Motion** | `UltrasonicTask` | **Crítica (5)** | **Capa de Seguridad:** Monitoreo de entorno y prevención de colisiones. Máxima prioridad del sistema. |
+| **Core 0** | **Real-Time Control** | `MotorTask`, `SteerTask` | Alta (3-4) | Generación de PWM preciso y bucles de control. Aislado de interrupciones de red. |
+| **Core 1** | **Comms Ingress** | `LinkRxTask` | Alta (4) | Recepción y decodificación de alta velocidad (UART/WiFi). |
+| **Core 1** | **System & I/O** | `WebTask`, `Supervisor`, `LinkTx`, `Lights` | Media/Baja (1-2) | Gestión de pila TCP/IP, telemetría, watchdog y control de iluminación. |
+
+## 6. Evaluación de Arquitectura y Roadmap
 
 Esta versión (2.0.0) es funcional y estable, pero presenta limitaciones para conducción autónoma de alta velocidad o competición.
 
-### 5.1 Problemas Identificados
+### 6.1 Problemas Identificados
 1.  **Latencia de Entrada:** El retraso de hasta 10ms introduce un desfase perceptible entre la visión (Brain) y la acción (Ruedas).
 2.  **Desperdicio de Recursos:** El microcontrolador no entra en modos de bajo consumo efectivos porque despierta constantemente.
 3.  **Sincronización:** No se aprovecha la capacidad del ESP32 para reaccionar a interrupciones de software.
 
-### 5.2 Propuesta de Refactor (Hacia v3.0.0)
+### 6.2 Propuesta de Refactor (Hacia v3.0.0)
 Se ha aprobado la migración hacia una arquitectura **Event-Driven** utilizando `Direct Task Notifications` para eliminar el `vTaskDelay`. Esto reducirá la latencia teórica de ~10ms a <0.1ms.
