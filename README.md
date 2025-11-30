@@ -31,18 +31,17 @@ El flujo de datos estándar desacopla la recepción de la ejecución:
 2.  **Ejecución Sincrónica:** El consumidor (`MotorTask`) utiliza `vTaskDelay` para mantener un periodo de muestreo fijo (10ms). Al despertar, toma la "foto" más reciente del estado del buzón y la aplica.
 
 ### 2.2 Mecanismo de Excepción: Fast-Path de Emergencia
-Para garantizar la seguridad, existe una función pública `motor_task_trigger_emergency()` que permite omitir el ciclo de polling y activar el frenado instantáneamente.
+Para garantizar la seguridad crítica, el sistema implementa un canal de comunicación de alta prioridad que permite omitir el ciclo de espera periódico y forzar el frenado inmediato.
 
-* **Funcionamiento:**
-    1.  La `MotorTask` registra su propio handle al iniciar: `motor_task_handle = xTaskGetCurrentTaskHandle()`.
-    2.  Al detectarse una emergencia, se invoca `xTaskNotify(motor_task_handle, EMERGENCY_NOTIFICATION_BIT, eSetBits)`.
-    3.  La `MotorTask` verifica la notificación al inicio de su ciclo mediante `ulTaskNotifyTake(pdTRUE, 0)`, reaccionando en **<1ms**.
+* **Mecanismo de Acción:**
+    1.  **Notificación Directa:** Se utiliza un mecanismo de señalización asíncrono (Event Flags) para enviar una alerta directa a la tarea de control, evitando la cola de espera del *polling*.
+    2.  **Despertar Inmediato:** Al recibir esta señal, la Tarea de Motor interrumpe su estado de suspensión (`Sleep`) instantáneamente, sin esperar a que se cumpla el tiempo del ciclo.
+    3.  **Prioridad de Ejecución:** La lógica de emergencia se evalúa antes que cualquier comando de movimiento estándar, asegurando una reacción en tiempo real estricto (<1ms).
 
 * **Fuentes de Disparo:**
-    * `ultrasonic_task`: Detección de obstáculos cercanos (Safety Barrier).
-    * `link_rx_task`: Comando explícito `BRAKE_NOW`.
-    * `supervisor_task`: Fallos de sistema.
-    * `web_task`: Botón de pánico en la UI.
+    * **Sensores Físicos:** Ultrasonido (barrera de proximidad).
+    * **Comandos Externos:** Solicitud de parada inmediata vía UART o Web (Botón de Pánico).
+    * **Sistema:** Fallos de estado detectados por el Supervisor.
 
 | Característica | Comandos Normales | Emergencia |
 | :--- | :--- | :--- |
