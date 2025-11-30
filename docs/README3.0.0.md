@@ -1,6 +1,6 @@
 # Documento de Arquitectura de Software
 **Proyecto:** Sistema de Control de Vehículo RC (ESP32 / FreeRTOS)  
-**Versión:** 1.1.0  
+**Versión:** 3.0.0  
 **Fecha:** Noviembre 2025  
 
 ---
