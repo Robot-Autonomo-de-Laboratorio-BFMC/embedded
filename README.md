@@ -1,52 +1,65 @@
 # Documento de Arquitectura de Software (SAD)
 
-**Subsistema:** Low-Level Vehicle Controller (VCU)  
+**Subsistema:** Vehicle Control Unit (VCU)  
 **Plataforma:** ESP32 / FreeRTOS  
-**Versión:** 2.0.0 (Legacy Implementation - Polling Based)  
+**Versión:** 2.0.0  
 **Fecha:** Noviembre 2025  
 
 ---
 
 ## 1. Visión General de la Arquitectura
 
-El sistema implementa una arquitectura de tiempo real basada en muestreo periódico (**Time-Triggered Architecture**). Las tareas de control se ejecutan a una frecuencia fija definida por `vTaskDelay`, consultando el estado de los mailboxes en cada ciclo.
+El sistema implementa una arquitectura de tiempo real basada en muestreo periódico (**Time-Triggered Architecture**). Las tareas de control se ejecutan de manera sincrónica a una frecuencia predeterminada, garantizando un ciclo de ejecución constante y predecible.
 
-Si bien utiliza la estructura de **Mailboxes** para el intercambio de datos thread-safe, el mecanismo de activación de tareas es sincrónico (basado en tiempo) y no asincrónico (basado en eventos).
+Este diseño prioriza la estabilidad del bucle de control y la simplicidad en la depuración, utilizando un modelo de **Mailboxes** para el intercambio seguro de datos entre hilos.
 
-### 1.1 Drivers Arquitectónicos (v2.0)
-El diseño actual prioriza la simplicidad de implementación y la estabilidad del bucle de control periódico.
+### 1.1 Drivers Arquitectónicos
+El diseño actual se fundamenta en los siguientes principios:
 
-* **Ciclo de Control Fijo:** Las tareas de actuación (Motor/Dirección) corren a 100Hz (10ms) independientemente de la llegada de nuevos datos.
-* **Seguridad (Safety):** Se implementa un mecanismo de `Time-To-Live` (TTL) en los datos para detener el vehículo ante pérdida de comunicaciones.
-* **Separación de Núcleos:** Se utiliza *Core Pinning* para separar la lógica de red (Core 1) del control de motores (Core 0).
-
----
+* **Determinismo de Ciclo:** Las tareas de actuación (Motor/Dirección) mantienen una cadencia fija de 100Hz (10ms), lo que asegura que el PWM se actualice de forma constante.
+* **Seguridad (Safety):** Se implementa un mecanismo de `Time-To-Live` (TTL) que valida la frescura de los datos en cada ciclo de lectura, llevando el vehículo a un estado seguro ante la pérdida de enlace.
+* **Separación de Recursos:** Se utiliza *Core Pinning* para aislar el procesamiento de comunicaciones (Core 1) de la ejecución crítica de movimiento (Core 0).
 
 ## 2. Estrategia de Comunicación Inter-Procesos (IPC)
 
-La comunicación entre las tareas de recepción (`LinkRxTask`) y las de control (`MotorTask`) se realiza mediante un modelo de **Polling sobre Memoria Compartida**.
+La arquitectura utiliza un modelo híbrido: **Polling** para operación nominal y **Notificaciones Directas** para emergencias.
 
-### 2.1 Mecanismo: Polling con Mailbox
-A diferencia de un sistema puramente reactivo, aquí el consumidor es quien marca el ritmo.
+### 2.1 Operación Nominal: Polling con Mailbox
+El flujo de datos estándar desacopla la recepción de la ejecución:
 
-1.  **Productor (LinkRx):** Escribe el dato en el `mailbox_t` protegido por Mutex tan pronto llega por UART.
-2.  **Consumidor (MotorTask):**
-    * Duerme durante un periodo fijo (`vTaskDelay(10ms)`).
-    * Despierta.
-    * Bloquea el Mutex y lee el Mailbox.
-    * Si el dato es nuevo y válido, actualiza el PWM.
-    * Vuelve a dormir.
+1.  **Recepción Asíncrona:** El productor (`LinkRx`) actualiza el `mailbox_t` (protegido por Mutex) inmediatamente al recibir datos por UART.
+2.  **Ejecución Sincrónica:** El consumidor (`MotorTask`) utiliza `vTaskDelay` para mantener un periodo de muestreo fijo (10ms). Al despertar, toma la "foto" más reciente del estado del buzón y la aplica.
 
-### 2.2 Limitaciones de este Enfoque
-* **Latencia Variable (Jitter):** Existe un retardo de entre 0ms y 10ms desde que el dato llega hasta que se procesa, dependiendo de en qué punto del ciclo de sueño se encuentre la tarea.
-* **Consumo de CPU:** Las tareas despiertan 100 veces por segundo incluso si el vehículo está detenido y no hay comandos nuevos.
+### 2.2 Mecanismo de Excepción: Fast-Path de Emergencia
+Para garantizar la seguridad, existe una función pública `motor_task_trigger_emergency()` que permite omitir el ciclo de polling y activar el frenado instantáneamente.
+
+* **Funcionamiento:**
+    1.  La `MotorTask` registra su propio handle al iniciar: `motor_task_handle = xTaskGetCurrentTaskHandle()`.
+    2.  Al detectarse una emergencia, se invoca `xTaskNotify(motor_task_handle, EMERGENCY_NOTIFICATION_BIT, eSetBits)`.
+    3.  La `MotorTask` verifica la notificación al inicio de su ciclo mediante `ulTaskNotifyTake(pdTRUE, 0)`, reaccionando en **<1ms**.
+
+* **Fuentes de Disparo:**
+    * `ultrasonic_task`: Detección de obstáculos cercanos (Safety Barrier).
+    * `link_rx_task`: Comando explícito `BRAKE_NOW`.
+    * `supervisor_task`: Fallos de sistema.
+    * `web_task`: Botón de pánico en la UI.
+
+| Característica | Comandos Normales | Emergencia |
+| :--- | :--- | :--- |
+| **Mecanismo** | `mailbox_write()` | `motor_task_trigger_emergency()` |
+| **Activación** | Polling (Timer) | Notificación Directa |
+| **Latencia** | Variable (0-10ms) | Inmediata (<1ms) |
+
+### 2.3 Características Operativas (Limitaciones)
+* **Previsibilidad vs Latencia:** La carga de la CPU es constante, pero existe un *jitter* inherente en la respuesta a comandos normales.
+* **Filtrado Implícito:** Al muestrear a 100Hz, el sistema ignora variaciones de alta frecuencia entre ciclos.
 
 ---
 
 ## 3. Vista Lógica y Estructura de Datos
 
 ### 3.1 Estructura del Mailbox
-Se mantiene la estructura robusta que permite validar la frescura de los datos.
+La estructura de datos es el contrato central entre tareas, diseñada para la integridad y validación temporal.
 
 ```c
 typedef struct {
@@ -59,87 +72,107 @@ typedef struct {
 } mailbox_t;
 ```
 
+### 3.2 Subsistema de Supervisión (`SupervisorTask`)
+El `supervisor_mailbox` no gestiona el movimiento del vehículo, sino la **Gestión del Estado del Sistema**.
+
+* **Responsabilidad:** Controlar la Máquina de Estados Global (`DISARMED` → `ARMED` → `RUNNING` → `FAULT`).
+* **Fuentes de Comandos:** `link_rx_task` (UART) y `web_task` (HTTP).
+
+| Comando | Acción | Transición Típica |
+| :--- | :--- | :--- |
+| **CMD_SYS_ARM** | Habilita el sistema y resetea heartbeat. | `DISARMED` → `ARMED` |
+| **CMD_SYS_DISARM** | Detiene motor, centra dirección y deshabilita. | `ANY` → `DISARMED` |
+| **CMD_SYS_MODE** | Cambia lógica de control (`AUTO` vs `MANUAL`). | Afecta Watchdog |
+
+* **Funciones Adicionales:**
+    * **Watchdog/Heartbeat:** En modo `AUTO`, verifica recepción constante de datos. Si falla, desarma el sistema.
+    * **E-STOP Hardware:** Monitoreo directo de pin GPIO para parada de emergencia física.
+    * **Validación:** Impide que los comandos de motor/dirección se ejecuten si el estado no es `ARMED/RUNNING`.
+
 ---
 
-## 4. Diagramas de Arquitectura (Comportamiento Actual)
+## 4. Diagramas de Arquitectura
 
-### 4.1 Diagrama de Secuencia: Ciclo de Polling
-
-Este diagrama muestra cómo la ejecución de la tarea del motor está **desacoplada temporalmente** de la llegada del dato. Observa cómo el dato puede esperar en el buzón hasta que termine el `Delay`.
+### 4.1 Diagrama de Secuencia: Ciclo de Control
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant UART
     participant Producer as LinkRxTask
+    participant Safety as UltrasonicTask
     participant Data as Motor Mailbox
     participant Consumer as MotorTask
 
+    %% CASO 1: COMANDO NORMAL (POLLING)
     Note over Consumer: Estado: BLOCKED (Delay 10ms)
-
-    %% El dato llega mientras la tarea duerme
     UART->>Producer: Recibe "SET_SPEED: 200"
     Producer->>Data: Escribe {val: 200}
-    Note right of Data: Dato actualizado<br/>(Esperando lectura)
-
-    %% La tarea sigue durmiendo...
-    Note over Consumer: ... (Tiempo muerto) ...
-
-    %% Finalmente despierta por el Timer
-    Note over Consumer: Fin vTaskDelay()
     
+    Note over Consumer: ... Esperando Timer ...
+    
+    Note over Consumer: Fin vTaskDelay()
     rect rgb(40, 40, 50)
-        note right of Consumer: Ciclo de Control (100Hz)
+        note right of Consumer: Ciclo Normal
         Consumer->>Data: Lee Mailbox
-        Data-->>Consumer: Retorna {val: 200}
         Consumer->>Consumer: Actualizar PWM
     end
 
-    Note over Consumer: vTaskDelay(10ms)
-    Note over Consumer: Vuelve a Dormir
+    %% CASO 2: EMERGENCIA (FAST PATH)
+    Note over Consumer: Estado: BLOCKED (Delay 10ms)
+    Safety->>Safety: Obstáculo Detectado!
+    
+    rect rgb(60, 20, 20)
+        note right of Safety: Fast Path (<1ms)
+        Safety->>Consumer: xTaskNotify(EMERGENCY)
+        Note over Consumer: DESPIERTA INMEDIATAMENTE
+        Consumer->>Consumer: STOP MOTOR
+    end
 ```
 
 ### 4.2 Diagrama de Despliegue
 
-La estructura física es idéntica a la v3.0, pero las líneas de "Notificación" no existen o no son efectivas en la lógica de control principal.
-
 ```mermaid
 graph TD
-    %% === CAPA SUPERIOR: ENTRADAS (CORE 1) ===
-    subgraph Core1 ["Core 1: Inputs & Comms"]
-        RX[LinkRxTask]
-        WEB[WebTask]
-        SUP[Supervisor]
-        TX[LinkTxTask]
+    subgraph Core1 ["Core 1: Comms & System"]
+        direction TB
+        LGT[LightsTask<br/>Prio: 1]
+        RX[LinkRxTask<br/>Prio: 4]
+        TX[LinkTxTask<br/>Prio: 2]
+        WEB[WebTask<br/>Prio: 2]
+        SUP[SupervisorTask<br/>Prio: 2]
     end
 
-    %% === CAPA MEDIA: ALMACENAMIENTO ===
-    subgraph Shared ["Memoria Compartida"]
-        MB_MOT[Motor MB]
-        MB_STR[Steer MB]
-        MB_LGT[Lights MB]
+    subgraph Shared ["Espacio de Memoria"]
+        direction TB
+        MB_MOT[("Motor MB")]
+        MB_STR[("Steer MB")]
+        MB_LGT[("Lights MB")]
+        MB_SUP[("Supervisor MB")]
     end
 
-    %% === CAPA INFERIOR: SALIDAS (CORE 0) ===
-    subgraph Actuators ["Actuadores (Core 0 + Lights)"]
-        US["Ultrasonic (Safety)"]
-        MOT["MotorTask (100Hz Loop)"]
-        STR["SteerTask (100Hz Loop)"]
-        LGT["LightsTask (10Hz Loop)"]
+    subgraph Core0 ["Core 0: Safety & Control"]
+        direction TB
+        US["UltrasonicTask<br/>Prio: 5 (SAFETY)"]
+        MOT[MotorTask<br/>Prio: 4]
+        STR[SteerTask<br/>Prio: 3]
     end
 
-    %% === FLUJO DE DATOS ===
-    RX --> MB_MOT
-    RX --> MB_STR
-    WEB --> MB_LGT
-    
-    %% === LECTURA PERIÓDICA (POLLING) ===
-    %% Las líneas punteadas indican lectura asíncrona
-    MB_MOT -.->|"Lee cada 10ms"| MOT
-    MB_STR -.->|"Lee cada 10ms"| STR
-    MB_LGT -.->|"Lee cada 100ms"| LGT
+    %% Relaciones de Escritura
+    RX ==> MB_MOT
+    RX ==> MB_STR
+    RX ==> MB_LGT
+    RX ==> MB_SUP
+    WEB ~~~ MB_SUP
 
-    %% Seguridad
+    %% Lectura
+    MB_MOT -.->|"Lee (10ms)"| MOT
+    MB_STR -.->|"Lee (10ms)"| STR
+    MB_SUP -.->|"Lee (10ms)"| SUP
+    MB_LGT -.->|"Lee (1000ms)"| LGT
+
+    %% Relaciones de Control
+    SUP -.->|"Control de Estado"| MOT
     US -.->|"Emergency Stop"| MOT
 ```
 
@@ -158,14 +191,15 @@ El sistema utiliza **Multiprocesamiento Asimétrico** sobre los dos núcleos del
 | **Core 1** | **Comms Ingress** | `LinkRxTask` | Alta (4) | Recepción y decodificación de alta velocidad (UART/WiFi). |
 | **Core 1** | **System & I/O** | `WebTask`, `Supervisor`, `LinkTx`, `Lights` | Media/Baja (1-2) | Gestión de pila TCP/IP, telemetría, watchdog y control de iluminación. |
 
-## 6. Evaluación de Arquitectura y Roadmap
+---
 
-Esta versión (2.0.0) es funcional y estable, pero presenta limitaciones para conducción autónoma de alta velocidad o competición.
+## 6. Evolución de la Arquitectura (Roadmap)
 
-### 6.1 Problemas Identificados
-1.  **Latencia de Entrada:** El retraso de hasta 10ms introduce un desfase perceptible entre la visión (Brain) y la acción (Ruedas).
-2.  **Desperdicio de Recursos:** El microcontrolador no entra en modos de bajo consumo efectivos porque despierta constantemente.
-3.  **Sincronización:** No se aprovecha la capacidad del ESP32 para reaccionar a interrupciones de software.
+La arquitectura actual (v2.0) proporciona una base sólida y estable. Sin embargo, para escenarios de competición o maniobras de alta velocidad que requieren tiempos de reacción en el orden de los microsegundos, se ha planteado una evolución hacia la versión 3.0.
 
-### 6.2 Propuesta de Refactor (Hacia v3.0.0)
-Se ha aprobado la migración hacia una arquitectura **Event-Driven** utilizando `Direct Task Notifications` para eliminar el `vTaskDelay`. Esto reducirá la latencia teórica de ~10ms a <0.1ms.
+### 6.1 Áreas de Optimización
+1.  **Reducción de Latencia:** En el modelo actual, el tiempo de respuesta está acotado por el periodo de muestreo (10ms). Una arquitectura basada en eventos eliminaría esta espera.
+2.  **Eficiencia Energética:** La transición a un modelo *Event-Driven* permitiría que el procesador permanezca en estado *Idle* durante los periodos de inactividad, en lugar de despertar periódicamente.
+
+### 6.2 Próxima Iteración (v3.0.0)
+La siguiente versión extenderá el patrón "Fast-Path" actual a la operación nominal, transformando el sistema de un modelo híbrido a uno puramente reactivo.
